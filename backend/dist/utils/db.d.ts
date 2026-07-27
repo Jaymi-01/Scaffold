@@ -35,28 +35,23 @@ export interface Component {
     createdAt: string;
     updatedAt: string;
 }
-export interface DatabaseSchema {
-    users: User[];
-    projects: Project[];
-    components: Component[];
-}
 export declare const db: {
-    getUsers: () => User[];
-    getUserById: (id: string) => User | undefined;
-    getUserByUsername: (username: string) => User | undefined;
-    getUserByEmail: (email: string) => User | undefined;
-    addUser: (user: User) => void;
-    updateUser: (userId: string, updates: Partial<Omit<User, 'id' | 'createdAt'>>) => User | undefined;
-    getProjects: () => Project[];
-    getProjectById: (id: string) => Project | undefined;
-    getProjectsByOwner: (ownerId: string) => Project[];
-    addProject: (project: Project) => void;
-    updateProject: (projectId: string, updates: Partial<Omit<Project, 'id' | 'ownerId' | 'createdAt'>>) => Project | undefined;
-    deleteProject: (projectId: string) => boolean;
-    getComponents: (projectId: string) => Component[];
-    getComponentById: (id: string) => Component | undefined;
-    addComponent: (component: Component) => void;
-    updateComponent: (componentId: string, updates: Partial<Omit<Component, 'id' | 'projectId' | 'createdAt'>>) => Component | undefined;
-    deleteComponent: (componentId: string) => boolean;
+    getUsers: () => Promise<User[]>;
+    getUserById: (id: string) => Promise<User | undefined>;
+    getUserByUsername: (username: string) => Promise<User | undefined>;
+    getUserByEmail: (email: string) => Promise<User | undefined>;
+    addUser: (user: User) => Promise<void>;
+    updateUser: (userId: string, updates: Partial<Omit<User, 'id' | 'createdAt'>>) => Promise<User | undefined>;
+    getProjects: () => Promise<Project[]>;
+    getProjectById: (id: string) => Promise<Project | undefined>;
+    getProjectsByOwner: (ownerId: string) => Promise<Project[]>;
+    addProject: (project: Project) => Promise<void>;
+    updateProject: (projectId: string, updates: Partial<Omit<Project, 'id' | 'ownerId' | 'createdAt'>>) => Promise<Project | undefined>;
+    deleteProject: (projectId: string) => Promise<boolean>;
+    getComponents: (projectId: string) => Promise<Component[]>;
+    getComponentById: (id: string) => Promise<Component | undefined>;
+    addComponent: (component: Component) => Promise<void>;
+    updateComponent: (componentId: string, updates: Partial<Omit<Component, 'id' | 'projectId' | 'createdAt'>>) => Promise<Component | undefined>;
+    deleteComponent: (componentId: string) => Promise<boolean>;
 };
 //# sourceMappingURL=db.d.ts.map
