@@ -100,16 +100,16 @@ export const api = {
   },
 
   verifyOtp: async (email: string, otp: string) => {
-    return request<{ message: string }>('/auth/verify-otp', {
+    return request<{ message: string; resetToken: string }>('/auth/verify-otp', {
       method: 'POST',
       body: JSON.stringify({ email, otp }),
     });
   },
 
-  resetPassword: async (email: string, otp: string, newPassword: string) => {
+  resetPassword: async (email: string, resetToken: string, newPassword: string) => {
     return request<{ message: string }>('/auth/reset-password', {
       method: 'POST',
-      body: JSON.stringify({ email, otp, newPassword }),
+      body: JSON.stringify({ email, resetToken, newPassword }),
     });
   },
 
