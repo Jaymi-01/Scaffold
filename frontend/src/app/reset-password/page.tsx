@@ -27,7 +27,7 @@ function ResetPasswordContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const email = searchParams.get("email") || "";
-  const otp = searchParams.get("otp") || "";
+  const token = searchParams.get("token") || "";
 
   const [form, setForm] = useState({ password: "", confirmPassword: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -72,7 +72,7 @@ function ResetPasswordContent() {
     e.preventDefault();
     setErrors({});
     
-    if (!email || !otp) {
+    if (!email || !token) {
       setErrors({ form: "Reset session has expired or is invalid. Please request a new code." });
       return;
     }
@@ -92,7 +92,7 @@ function ResetPasswordContent() {
 
     setActionLoading(true);
     try {
-      await api.resetPassword(email, otp, form.password);
+      await api.resetPassword(email, token, form.password);
       setInfoMessage("Password reset successful! Redirecting to sign in...");
       setTimeout(() => {
         router.push("/login");
@@ -203,10 +203,17 @@ function ResetPasswordContent() {
         <button
           type="submit"
           disabled={actionLoading}
-          className="w-full py-2.5 rounded-xl font-bold bg-rosy-copper-600 hover:bg-rosy-copper-700 text-white transition flex items-center justify-center cursor-pointer text-base"
+          className={`w-full py-2.5 rounded-xl font-bold text-white transition flex items-center justify-center text-base ${
+            actionLoading
+              ? "bg-rosy-copper-600/75 cursor-not-allowed"
+              : "bg-rosy-copper-600 hover:bg-rosy-copper-700 cursor-pointer"
+          }`}
         >
           {actionLoading ? (
-            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+              <span>Updating...</span>
+            </div>
           ) : (
             "Reset Password"
           )}
