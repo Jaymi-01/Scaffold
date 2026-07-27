@@ -241,10 +241,17 @@ export default function SignupPage() {
             <button
               type="submit"
               disabled={actionLoading}
-              className="w-full py-2.5 rounded-xl font-bold bg-rosy-copper-600 hover:bg-rosy-copper-700 text-white transition flex items-center justify-center cursor-pointer text-base"
+              className={`w-full py-2.5 rounded-xl font-bold text-white transition flex items-center justify-center text-base ${
+                actionLoading
+                  ? "bg-rosy-copper-600/75 cursor-not-allowed"
+                  : "bg-rosy-copper-600 hover:bg-rosy-copper-700 cursor-pointer"
+              }`}
             >
               {actionLoading ? (
-                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  <span>Registering...</span>
+                </div>
               ) : (
                 "Create Account"
               )}
