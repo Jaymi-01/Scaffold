@@ -3,6 +3,7 @@ import bcryptjs from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { db, User, Project, Component, ComponentProp } from '../utils/db.js';
+import { sendOtpEmail } from '../utils/mailer.js';
 import { authenticateToken, optionalAuthenticateToken, AuthenticatedRequest } from '../middleware/auth.js';
 
 const router: express.Router = express.Router();
@@ -189,7 +190,7 @@ router.post('/auth/forgot-password', async (req, res) => {
     otpLockoutUntil: undefined
   });
 
-  console.log(`[AUTH] OTP for resetting password of ${email}: ${otp}`);
+  await sendOtpEmail(email, otp);
 
   res.json({
     message: 'OTP sent successfully. Please check your email.',
@@ -248,14 +249,26 @@ router.post('/auth/verify-otp', async (req, res) => {
     return;
   }
 
-  res.json({ message: 'OTP verified successfully' });
+  const resetToken = crypto.randomUUID();
+  const resetTokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
+
+  await db.updateUser(user.id, {
+    otp: undefined,
+    otpExpiresAt: undefined,
+    otpFailedAttempts: 0,
+    otpLockoutUntil: undefined,
+    resetToken,
+    resetTokenExpiresAt
+  });
+
+  res.json({ message: 'OTP verified successfully', resetToken });
 });
 
 router.post('/auth/reset-password', async (req, res) => {
-  const { email, otp, newPassword } = req.body;
+  const { email, resetToken, newPassword } = req.body;
 
-  if (!email || !otp || !newPassword) {
-    res.status(400).json({ error: 'Email, OTP, and new password are required' });
+  if (!email || !resetToken || !newPassword) {
+    res.status(400).json({ error: 'Email, reset token, and new password are required' });
     return;
   }
 
@@ -265,40 +278,13 @@ router.post('/auth/reset-password', async (req, res) => {
     return;
   }
 
-  // Check if user is locked out
-  if (user.otpLockoutUntil && new Date(user.otpLockoutUntil).getTime() > Date.now()) {
-    const timeLeft = Math.ceil((new Date(user.otpLockoutUntil).getTime() - Date.now()) / 1000);
-    const minutesLeft = Math.ceil(timeLeft / 60);
-    res.status(429).json({
-      error: `Too many failed attempts. Try again in ${minutesLeft} minute(s).`,
-      lockoutUntil: user.otpLockoutUntil
-    });
+  if (!user.resetToken || user.resetToken !== resetToken) {
+    res.status(400).json({ error: 'Invalid password reset session. Please verify your OTP again.' });
     return;
   }
 
-  if (!user.otp || user.otp !== otp) {
-    const attempts = (user.otpFailedAttempts || 0) + 1;
-    if (attempts >= 5) {
-      const lockoutTime = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-      await db.updateUser(user.id, {
-        otpFailedAttempts: 0,
-        otpLockoutUntil: lockoutTime
-      });
-      res.status(429).json({
-        error: 'Too many failed attempts. You are locked out for 5 minutes.',
-        lockoutUntil: lockoutTime
-      });
-    } else {
-      await db.updateUser(user.id, {
-        otpFailedAttempts: attempts
-      });
-      res.status(400).json({ error: 'Incorrect code' });
-    }
-    return;
-  }
-
-  if (!user.otpExpiresAt || new Date(user.otpExpiresAt).getTime() < Date.now()) {
-    res.status(400).json({ error: 'Reset code has expired. Please request a new one.' });
+  if (!user.resetTokenExpiresAt || new Date(user.resetTokenExpiresAt).getTime() < Date.now()) {
+    res.status(400).json({ error: 'Password reset session has expired. Please request a new code.' });
     return;
   }
 
@@ -308,7 +294,9 @@ router.post('/auth/reset-password', async (req, res) => {
     otp: undefined,
     otpExpiresAt: undefined,
     otpFailedAttempts: 0,
-    otpLockoutUntil: undefined
+    otpLockoutUntil: undefined,
+    resetToken: undefined,
+    resetTokenExpiresAt: undefined
   });
 
   res.json({ message: 'Password has been reset successfully' });
