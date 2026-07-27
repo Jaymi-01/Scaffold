@@ -1,0 +1,23 @@
+{
+  "users": [
+    {
+      "id": "332d1dc9-3274-4aad-820b-8d3e28b1419e",
+      "username": "Jaymi",
+      "email": "admin@gmail.com",
+      "passwordHash": "$2b$10$9TL7tORIDIvhdFppegrI7ONCy9la2wlj.bZM.LVy.WD4fM3rRzWsu",
+      "createdAt": "2026-07-27T01:12:28.928Z"
+    },
+    {
+      "id": "6e641ab0-8f1a-43a7-8f41-dac58a8edf6b",
+      "username": "Jaymi1",
+      "email": "millerjoel7597@gmail.com",
+      "passwordHash": "$2b$10$s6cDPbCQ3GI03ipTKy5nYuCqb0nhTfGyKOY5vEp3g.DmyGTjnZs9O",
+      "createdAt": "2026-07-27T07:19:17.120Z",
+      "otpFailedAttempts": 0,
+      "otp": "115681",
+      "otpExpiresAt": "2026-07-27T07:47:29.390Z"
+    }
+  ],
+  "projects": [],
+  "components": []
+}
