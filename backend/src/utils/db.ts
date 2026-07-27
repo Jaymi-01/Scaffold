@@ -1,9 +1,17 @@
-import fs from 'fs';
+import { open, Database } from 'sqlite';
+import sqlite3 from 'sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const DB_FILE = process.env.DATABASE_PATH
+  ? path.resolve(process.env.DATABASE_PATH)
+  : path.join(__dirname, '..', '..', 'data', 'scaffold.db');
 
 export interface User {
   id: string;
@@ -46,149 +54,256 @@ export interface Component {
   updatedAt: string;
 }
 
-export interface DatabaseSchema {
-  users: User[];
-  projects: Project[];
-  components: Component[];
-}
+let dbInstance: Database | null = null;
 
-const DATA_DIR = path.join(__dirname, '..', '..', 'data');
-const DB_FILE = path.join(DATA_DIR, 'db.json');
-
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-// Initial database state if file doesn't exist
-const initialData: DatabaseSchema = {
-  users: [],
-  projects: [],
-  components: []
+const getDb = async (): Promise<Database> => {
+  if (dbInstance) return dbInstance;
+  
+  dbInstance = await open({
+    filename: DB_FILE,
+    driver: sqlite3.Database
+  });
+  
+  await dbInstance.run('PRAGMA foreign_keys = ON');
+  
+  return dbInstance;
 };
 
-// Read database file
-function readDb(): DatabaseSchema {
+// Create tables on initialization
+const initDb = async () => {
   try {
-    if (!fs.existsSync(DB_FILE)) {
-      writeDb(initialData);
-      return initialData;
-    }
-    const content = fs.readFileSync(DB_FILE, 'utf-8');
-    return JSON.parse(content);
-  } catch (error) {
-    console.error('Error reading database, resetting to initial state:', error);
-    return initialData;
-  }
-}
+    const database = await getDb();
+    
+    // Users table
+    await database.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        passwordHash TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        otp TEXT,
+        otpExpiresAt TEXT,
+        otpFailedAttempts INTEGER DEFAULT 0,
+        otpLockoutUntil TEXT
+      );
+    `);
 
-// Write database file atomically
-function writeDb(data: DatabaseSchema): void {
-  try {
-    const tempFile = `${DB_FILE}.tmp`;
-    fs.writeFileSync(tempFile, JSON.stringify(data, null, 2), 'utf-8');
-    fs.renameSync(tempFile, DB_FILE);
-  } catch (error) {
-    console.error('Error writing to database:', error);
-  }
-}
+    // Projects table
+    await database.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        ownerId TEXT NOT NULL,
+        isPublic INTEGER DEFAULT 1,
+        tailwindConfig TEXT,
+        createdAt TEXT NOT NULL
+      );
+    `);
 
-// Database helper functions
+    // Components table
+    await database.exec(`
+      CREATE TABLE IF NOT EXISTS components (
+        id TEXT PRIMARY KEY,
+        projectId TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        code TEXT NOT NULL,
+        props TEXT DEFAULT '[]',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+    `);
+    console.log('🚀 SQLite database initialized/verified successfully');
+  } catch (error) {
+    console.error('❌ Failed to initialize SQLite database:', error);
+  }
+};
+
+initDb();
+
 export const db = {
   // Users
-  getUsers: (): User[] => readDb().users,
-  getUserById: (id: string): User | undefined => {
-    return readDb().users.find(u => u.id === id);
+  getUsers: async (): Promise<User[]> => {
+    const database = await getDb();
+    const rows = await database.all('SELECT * FROM users');
+    return rows;
   },
-  getUserByUsername: (username: string): User | undefined => {
-    return readDb().users.find(u => u.username.toLowerCase() === username.toLowerCase());
+  getUserById: async (id: string): Promise<User | undefined> => {
+    const database = await getDb();
+    const row = await database.get('SELECT * FROM users WHERE id = ?1', [id]);
+    return row;
   },
-  getUserByEmail: (email: string): User | undefined => {
-    return readDb().users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  getUserByUsername: async (username: string): Promise<User | undefined> => {
+    const database = await getDb();
+    const row = await database.get('SELECT * FROM users WHERE LOWER(username) = LOWER(?1)', [username]);
+    return row;
   },
-  addUser: (user: User): void => {
-    const data = readDb();
-    data.users.push(user);
-    writeDb(data);
+  getUserByEmail: async (email: string): Promise<User | undefined> => {
+    const database = await getDb();
+    const row = await database.get('SELECT * FROM users WHERE LOWER(email) = LOWER(?1)', [email]);
+    return row;
   },
-  updateUser: (userId: string, updates: Partial<Omit<User, 'id' | 'createdAt'>>): User | undefined => {
-    const data = readDb();
-    const index = data.users.findIndex(u => u.id === userId);
-    if (index === -1) return undefined;
-    
-    data.users[index] = {
-      ...data.users[index],
-      ...updates
-    };
-    writeDb(data);
-    return data.users[index];
+  addUser: async (user: User): Promise<void> => {
+    const database = await getDb();
+    await database.run(
+      `INSERT INTO users (id, username, email, passwordHash, createdAt, otp, otpExpiresAt, otpFailedAttempts, otpLockoutUntil) 
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+      [
+        user.id,
+        user.username,
+        user.email,
+        user.passwordHash,
+        user.createdAt,
+        user.otp || null,
+        user.otpExpiresAt || null,
+        user.otpFailedAttempts || 0,
+        user.otpLockoutUntil || null
+      ]
+    );
+  },
+  updateUser: async (userId: string, updates: Partial<Omit<User, 'id' | 'createdAt'>>): Promise<User | undefined> => {
+    const database = await getDb();
+    const keys = Object.keys(updates);
+    if (keys.length === 0) return db.getUserById(userId);
+
+    const setClause = keys.map((key) => `${key} = ?`).join(', ');
+    const values = keys.map(key => (updates as any)[key]);
+
+    await database.run(
+      `UPDATE users SET ${setClause} WHERE id = ?`,
+      [...values, userId]
+    );
+    return db.getUserById(userId);
   },
 
   // Projects
-  getProjects: (): Project[] => readDb().projects,
-  getProjectById: (id: string): Project | undefined => {
-    return readDb().projects.find(p => p.id === id);
+  getProjects: async (): Promise<Project[]> => {
+    const database = await getDb();
+    const rows = await database.all('SELECT * FROM projects');
+    return rows.map(r => ({
+      ...r,
+      isPublic: r.isPublic === 1
+    }));
   },
-  getProjectsByOwner: (ownerId: string): Project[] => {
-    return readDb().projects.filter(p => p.ownerId === ownerId);
-  },
-  addProject: (project: Project): void => {
-    const data = readDb();
-    data.projects.push(project);
-    writeDb(data);
-  },
-  updateProject: (projectId: string, updates: Partial<Omit<Project, 'id' | 'ownerId' | 'createdAt'>>): Project | undefined => {
-    const data = readDb();
-    const index = data.projects.findIndex(p => p.id === projectId);
-    if (index === -1) return undefined;
-    
-    data.projects[index] = {
-      ...data.projects[index],
-      ...updates
+  getProjectById: async (id: string): Promise<Project | undefined> => {
+    const database = await getDb();
+    const row = await database.get('SELECT * FROM projects WHERE id = ?1', [id]);
+    if (!row) return undefined;
+    return {
+      ...row,
+      isPublic: row.isPublic === 1
     };
-    writeDb(data);
-    return data.projects[index];
   },
-  deleteProject: (projectId: string): boolean => {
-    const data = readDb();
-    const beforeCount = data.projects.length;
-    data.projects = data.projects.filter(p => p.id !== projectId);
-    // Also delete associated components
-    data.components = data.components.filter(c => c.projectId !== projectId);
-    writeDb(data);
-    return data.projects.length < beforeCount;
+  getProjectsByOwner: async (ownerId: string): Promise<Project[]> => {
+    const database = await getDb();
+    const rows = await database.all('SELECT * FROM projects WHERE ownerId = ?1', [ownerId]);
+    return rows.map(r => ({
+      ...r,
+      isPublic: r.isPublic === 1
+    }));
+  },
+  addProject: async (project: Project): Promise<void> => {
+    const database = await getDb();
+    await database.run(
+      `INSERT INTO projects (id, name, description, ownerId, isPublic, tailwindConfig, createdAt) 
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      [
+        project.id,
+        project.name,
+        project.description,
+        project.ownerId,
+        project.isPublic ? 1 : 0,
+        project.tailwindConfig || null,
+        project.createdAt
+      ]
+    );
+  },
+  updateProject: async (projectId: string, updates: Partial<Omit<Project, 'id' | 'ownerId' | 'createdAt'>>): Promise<Project | undefined> => {
+    const database = await getDb();
+    const keys = Object.keys(updates);
+    if (keys.length === 0) return db.getProjectById(projectId);
+
+    const setClause = keys.map((key) => `${key} = ?`).join(', ');
+    const values = keys.map(key => {
+      const val = (updates as any)[key];
+      if (key === 'isPublic') return val ? 1 : 0;
+      return val;
+    });
+
+    await database.run(
+      `UPDATE projects SET ${setClause} WHERE id = ?`,
+      [...values, projectId]
+    );
+    return db.getProjectById(projectId);
+  },
+  deleteProject: async (projectId: string): Promise<boolean> => {
+    const database = await getDb();
+    await database.run('DELETE FROM components WHERE projectId = ?1', [projectId]);
+    const res = await database.run('DELETE FROM projects WHERE id = ?1', [projectId]);
+    return (res.changes ?? 0) > 0;
   },
 
   // Components
-  getComponents: (projectId: string): Component[] => {
-    return readDb().components.filter(c => c.projectId === projectId);
+  getComponents: async (projectId: string): Promise<Component[]> => {
+    const database = await getDb();
+    const rows = await database.all('SELECT * FROM components WHERE projectId = ?1', [projectId]);
+    return rows.map(r => ({
+      ...r,
+      props: r.props ? JSON.parse(r.props) : []
+    }));
   },
-  getComponentById: (id: string): Component | undefined => {
-    return readDb().components.find(c => c.id === id);
-  },
-  addComponent: (component: Component): void => {
-    const data = readDb();
-    data.components.push(component);
-    writeDb(data);
-  },
-  updateComponent: (componentId: string, updates: Partial<Omit<Component, 'id' | 'projectId' | 'createdAt'>>): Component | undefined => {
-    const data = readDb();
-    const index = data.components.findIndex(c => c.id === componentId);
-    if (index === -1) return undefined;
-
-    data.components[index] = {
-      ...data.components[index],
-      ...updates,
-      updatedAt: new Date().toISOString()
+  getComponentById: async (id: string): Promise<Component | undefined> => {
+    const database = await getDb();
+    const row = await database.get('SELECT * FROM components WHERE id = ?1', [id]);
+    if (!row) return undefined;
+    return {
+      ...row,
+      props: row.props ? JSON.parse(row.props) : []
     };
-    writeDb(data);
-    return data.components[index];
   },
-  deleteComponent: (componentId: string): boolean => {
-    const data = readDb();
-    const beforeCount = data.components.length;
-    data.components = data.components.filter(c => c.id !== componentId);
-    writeDb(data);
-    return data.components.length < beforeCount;
+  addComponent: async (component: Component): Promise<void> => {
+    const database = await getDb();
+    await database.run(
+      `INSERT INTO components (id, projectId, name, description, code, props, createdAt, updatedAt) 
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      [
+        component.id,
+        component.projectId,
+        component.name,
+        component.description,
+        component.code,
+        JSON.stringify(component.props),
+        component.createdAt,
+        component.updatedAt
+      ]
+    );
+  },
+  updateComponent: async (componentId: string, updates: Partial<Omit<Component, 'id' | 'projectId' | 'createdAt'>>): Promise<Component | undefined> => {
+    const database = await getDb();
+    const keys = Object.keys(updates);
+    if (keys.length === 0) return db.getComponentById(componentId);
+
+    const updatedAt = new Date().toISOString();
+    const allUpdates = { ...updates, updatedAt };
+    const allKeys = Object.keys(allUpdates);
+
+    const setClause = allKeys.map((key) => `${key} = ?`).join(', ');
+    const values = allKeys.map(key => {
+      const val = (allUpdates as any)[key];
+      return typeof val === 'object' ? JSON.stringify(val) : val;
+    });
+
+    await database.run(
+      `UPDATE components SET ${setClause} WHERE id = ?`,
+      [...values, componentId]
+    );
+    return db.getComponentById(componentId);
+  },
+  deleteComponent: async (componentId: string): Promise<boolean> => {
+    const database = await getDb();
+    const res = await database.run('DELETE FROM components WHERE id = ?1', [componentId]);
+    return (res.changes ?? 0) > 0;
   }
 };
