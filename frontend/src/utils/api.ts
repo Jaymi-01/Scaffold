@@ -99,6 +99,13 @@ export const api = {
     });
   },
 
+  verifyOtp: async (email: string, otp: string) => {
+    return request<{ message: string }>('/auth/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email, otp }),
+    });
+  },
+
   resetPassword: async (email: string, otp: string, newPassword: string) => {
     return request<{ message: string }>('/auth/reset-password', {
       method: 'POST',
