@@ -23,6 +23,8 @@ export interface User {
   otpExpiresAt?: string;
   otpFailedAttempts?: number;
   otpLockoutUntil?: string;
+  resetToken?: string;
+  resetTokenExpiresAt?: string;
 }
 
 export interface Project {
@@ -85,9 +87,19 @@ const initDb = async () => {
         otp TEXT,
         otpExpiresAt TEXT,
         otpFailedAttempts INTEGER DEFAULT 0,
-        otpLockoutUntil TEXT
+        otpLockoutUntil TEXT,
+        resetToken TEXT,
+        resetTokenExpiresAt TEXT
       );
     `);
+
+    // Alter table dynamically if columns are missing
+    try {
+      await database.exec('ALTER TABLE users ADD COLUMN resetToken TEXT');
+    } catch (_) {}
+    try {
+      await database.exec('ALTER TABLE users ADD COLUMN resetTokenExpiresAt TEXT');
+    } catch (_) {}
 
     // Projects table
     await database.exec(`
@@ -148,8 +160,8 @@ export const db = {
   addUser: async (user: User): Promise<void> => {
     const database = await getDb();
     await database.run(
-      `INSERT INTO users (id, username, email, passwordHash, createdAt, otp, otpExpiresAt, otpFailedAttempts, otpLockoutUntil) 
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+      `INSERT INTO users (id, username, email, passwordHash, createdAt, otp, otpExpiresAt, otpFailedAttempts, otpLockoutUntil, resetToken, resetTokenExpiresAt) 
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
       [
         user.id,
         user.username,
@@ -159,7 +171,9 @@ export const db = {
         user.otp || null,
         user.otpExpiresAt || null,
         user.otpFailedAttempts || 0,
-        user.otpLockoutUntil || null
+        user.otpLockoutUntil || null,
+        user.resetToken || null,
+        user.resetTokenExpiresAt || null
       ]
     );
   },
