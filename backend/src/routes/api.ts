@@ -131,7 +131,10 @@ router.post('/auth/forgot-password', (req, res) => {
   if (user.otpLockoutUntil && new Date(user.otpLockoutUntil).getTime() > Date.now()) {
     const timeLeft = Math.ceil((new Date(user.otpLockoutUntil).getTime() - Date.now()) / 1000);
     const minutesLeft = Math.ceil(timeLeft / 60);
-    res.status(429).json({ error: `Resending code is disabled during lockout. Try again in ${minutesLeft} minute(s).` });
+    res.status(429).json({
+      error: `Resending code is disabled during lockout. Try again in ${minutesLeft} minute(s).`,
+      lockoutUntil: user.otpLockoutUntil
+    });
     return;
   }
 
@@ -154,6 +157,60 @@ router.post('/auth/forgot-password', (req, res) => {
   });
 });
 
+router.post('/auth/verify-otp', (req, res) => {
+  const { email, otp } = req.body;
+
+  if (!email || !otp) {
+    res.status(400).json({ error: 'Email and OTP are required' });
+    return;
+  }
+
+  const user = db.getUserByEmail(email);
+  if (!user) {
+    res.status(404).json({ error: 'No user registered with this email address' });
+    return;
+  }
+
+  // Check if user is locked out
+  if (user.otpLockoutUntil && new Date(user.otpLockoutUntil).getTime() > Date.now()) {
+    const timeLeft = Math.ceil((new Date(user.otpLockoutUntil).getTime() - Date.now()) / 1000);
+    const minutesLeft = Math.ceil(timeLeft / 60);
+    res.status(429).json({
+      error: `Too many failed attempts. Try again in ${minutesLeft} minute(s).`,
+      lockoutUntil: user.otpLockoutUntil
+    });
+    return;
+  }
+
+  if (!user.otp || user.otp !== otp) {
+    const attempts = (user.otpFailedAttempts || 0) + 1;
+    if (attempts >= 5) {
+      const lockoutTime = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      db.updateUser(user.id, {
+        otpFailedAttempts: 0,
+        otpLockoutUntil: lockoutTime
+      });
+      res.status(429).json({
+        error: 'Too many failed attempts. You are locked out for 5 minutes.',
+        lockoutUntil: lockoutTime
+      });
+    } else {
+      db.updateUser(user.id, {
+        otpFailedAttempts: attempts
+      });
+      res.status(400).json({ error: 'Incorrect code' });
+    }
+    return;
+  }
+
+  if (!user.otpExpiresAt || new Date(user.otpExpiresAt).getTime() < Date.now()) {
+    res.status(400).json({ error: 'Reset code has expired. Please request a new one.' });
+    return;
+  }
+
+  res.json({ message: 'OTP verified successfully' });
+});
+
 router.post('/auth/reset-password', (req, res) => {
   const { email, otp, newPassword } = req.body;
 
@@ -172,7 +229,10 @@ router.post('/auth/reset-password', (req, res) => {
   if (user.otpLockoutUntil && new Date(user.otpLockoutUntil).getTime() > Date.now()) {
     const timeLeft = Math.ceil((new Date(user.otpLockoutUntil).getTime() - Date.now()) / 1000);
     const minutesLeft = Math.ceil(timeLeft / 60);
-    res.status(429).json({ error: `Too many failed attempts. Try again in ${minutesLeft} minute(s).` });
+    res.status(429).json({
+      error: `Too many failed attempts. Try again in ${minutesLeft} minute(s).`,
+      lockoutUntil: user.otpLockoutUntil
+    });
     return;
   }
 
@@ -184,12 +244,15 @@ router.post('/auth/reset-password', (req, res) => {
         otpFailedAttempts: 0,
         otpLockoutUntil: lockoutTime
       });
-      res.status(429).json({ error: 'Too many failed attempts. You are locked out for 5 minutes.' });
+      res.status(429).json({
+        error: 'Too many failed attempts. You are locked out for 5 minutes.',
+        lockoutUntil: lockoutTime
+      });
     } else {
       db.updateUser(user.id, {
         otpFailedAttempts: attempts
       });
-      res.status(400).json({ error: `Invalid reset code. ${5 - attempts} attempt(s) remaining.` });
+      res.status(400).json({ error: 'Incorrect code' });
     }
     return;
   }
