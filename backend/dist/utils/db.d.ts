@@ -8,6 +8,8 @@ export interface User {
     otpExpiresAt?: string;
     otpFailedAttempts?: number;
     otpLockoutUntil?: string;
+    resetToken?: string;
+    resetTokenExpiresAt?: string;
 }
 export interface Project {
     id: string;
