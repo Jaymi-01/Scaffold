@@ -102,11 +102,16 @@ export default function ForgotPasswordPage() {
               className={`w-full py-2.5 rounded-xl font-bold transition flex items-center justify-center text-base ${
                 lockoutActive
                   ? "bg-slate-300 text-slate-500 cursor-not-allowed"
+                  : actionLoading
+                  ? "bg-rosy-copper-600/75 text-white cursor-not-allowed"
                   : "bg-rosy-copper-600 hover:bg-rosy-copper-700 text-white cursor-pointer"
               }`}
             >
               {actionLoading ? (
-                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  <span>Sending...</span>
+                </div>
               ) : (
                 "Send Code"
               )}
