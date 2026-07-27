@@ -1,38 +1,78 @@
-import { Router, Response } from 'express';
+import express from 'express';
 import bcryptjs from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { db, User, Project, Component } from '../utils/db.js';
-import { parsePropsFromCode } from '../utils/parser.js';
+import { db, User, Project, Component, ComponentProp } from '../utils/db.js';
 import { authenticateToken, optionalAuthenticateToken, AuthenticatedRequest } from '../middleware/auth.js';
 
-const router: Router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-docs-hub';
+const router: express.Router = express.Router();
+const JWT_SECRET = process.env.JWT_SECRET || 'scaffold-secret-key';
 
-// ----------------------------------------------------
-// UTILITY / LIVE PARSE ENDPOINTS
-// ----------------------------------------------------
-
-// Live parse arbitrary code (for the interactive playground)
-router.post('/parse-code', (req, res) => {
-  const { code } = req.body;
-  if (typeof code !== 'string') {
-    res.status(400).json({ error: 'Code string is required' });
-    return;
+// Helper: parse React components props from code (simple regex parser)
+function parsePropsFromCode(code: string): ComponentProp[] {
+  const props: ComponentProp[] = [];
+  
+  // Look for TypeScript interface/type defining props, e.g., interface ButtonProps { ... }
+  const propInterfaceRegex = /(?:interface|type)\s+(\w+Props)\s*(?:=)?\s*\{([\s\S]*?)\}/g;
+  let interfaceMatch;
+  
+  while ((interfaceMatch = propInterfaceRegex.exec(code)) !== null) {
+    const fieldsBody = interfaceMatch[2];
+    // Match fields: name?: type; or name: type; or name: type // description
+    const fieldRegex = /(\w+)(\?)?\s*:\s*([^;\n]+)/g;
+    let fieldMatch;
+    
+    while ((fieldMatch = fieldRegex.exec(fieldsBody)) !== null) {
+      const name = fieldMatch[1];
+      const isOptional = !!fieldMatch[2];
+      let rawType = fieldMatch[3].trim();
+      
+      // Strip comments
+      let description = '';
+      if (rawType.includes('//')) {
+        const parts = rawType.split('//');
+        rawType = parts[0].trim();
+        description = parts[1].trim();
+      }
+      
+      // Skip common React children/className props if we want to focus on config props
+      if (name === 'children' || name === 'className') continue;
+      
+      props.push({
+        name,
+        type: rawType,
+        required: !isOptional,
+        description: description || undefined
+      });
+    }
   }
-  try {
-    const props = parsePropsFromCode(code);
-    res.json({ props });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to parse code', details: error.message });
+  
+  // Fallback: If no TS interface found, try to search for object destructuring in functional component parameters
+  if (props.length === 0) {
+    const destructureRegex = /(?:const|function)\s+\w+\s*=\s*(?:async\s*)?\(\s*\{([\s\S]*?)\}\s*(?::\s*\w+Props)?\s*\)/;
+    const destructureMatch = destructureRegex.exec(code);
+    if (destructureMatch) {
+      const fields = destructureMatch[1].split(',').map(f => f.trim().split('=')[0].trim());
+      fields.forEach(field => {
+        if (field && field !== 'children' && field !== 'className' && !field.startsWith('...')) {
+          props.push({
+            name: field,
+            type: 'any',
+            required: false
+          });
+        }
+      });
+    }
   }
-});
+  
+  return props;
+}
 
 // ----------------------------------------------------
 // AUTH ENDPOINTS
 // ----------------------------------------------------
 
-router.post('/auth/register', (req, res) => {
+router.post('/auth/register', async (req, res) => {
   const { username, email, password } = req.body;
 
   if (!username || !email || !password) {
@@ -41,12 +81,12 @@ router.post('/auth/register', (req, res) => {
   }
 
   // Check if username or email already exists
-  if (db.getUserByUsername(username)) {
+  if (await db.getUserByUsername(username)) {
     res.status(400).json({ error: 'Username is already taken' });
     return;
   }
 
-  if (db.getUserByEmail(email)) {
+  if (await db.getUserByEmail(email)) {
     res.status(400).json({ error: 'Email is already registered' });
     return;
   }
@@ -60,7 +100,7 @@ router.post('/auth/register', (req, res) => {
     createdAt: new Date().toISOString()
   };
 
-  db.addUser(newUser);
+  await db.addUser(newUser);
 
   const token = jwt.sign(
     { id: newUser.id, username: newUser.username, email: newUser.email },
@@ -78,7 +118,7 @@ router.post('/auth/register', (req, res) => {
   });
 });
 
-router.post('/auth/login', (req, res) => {
+router.post('/auth/login', async (req, res) => {
   const { usernameOrEmail, password } = req.body;
 
   if (!usernameOrEmail || !password) {
@@ -87,9 +127,9 @@ router.post('/auth/login', (req, res) => {
   }
 
   // Find user by username or email
-  let user = db.getUserByUsername(usernameOrEmail);
+  let user = await db.getUserByUsername(usernameOrEmail);
   if (!user) {
-    user = db.getUserByEmail(usernameOrEmail);
+    user = await db.getUserByEmail(usernameOrEmail);
   }
 
   if (!user || !bcryptjs.compareSync(password, user.passwordHash)) {
@@ -113,7 +153,7 @@ router.post('/auth/login', (req, res) => {
   });
 });
 
-router.post('/auth/forgot-password', (req, res) => {
+router.post('/auth/forgot-password', async (req, res) => {
   const { email } = req.body;
 
   if (!email) {
@@ -121,7 +161,7 @@ router.post('/auth/forgot-password', (req, res) => {
     return;
   }
 
-  const user = db.getUserByEmail(email);
+  const user = await db.getUserByEmail(email);
   if (!user) {
     res.status(404).json({ error: 'No user registered with this email address' });
     return;
@@ -142,7 +182,7 @@ router.post('/auth/forgot-password', (req, res) => {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   const otpExpiresAt = new Date(Date.now() + 60 * 1000).toISOString(); // 60 seconds expiry
 
-  db.updateUser(user.id, {
+  await db.updateUser(user.id, {
     otp,
     otpExpiresAt,
     otpFailedAttempts: 0,
@@ -157,7 +197,7 @@ router.post('/auth/forgot-password', (req, res) => {
   });
 });
 
-router.post('/auth/verify-otp', (req, res) => {
+router.post('/auth/verify-otp', async (req, res) => {
   const { email, otp } = req.body;
 
   if (!email || !otp) {
@@ -165,7 +205,7 @@ router.post('/auth/verify-otp', (req, res) => {
     return;
   }
 
-  const user = db.getUserByEmail(email);
+  const user = await db.getUserByEmail(email);
   if (!user) {
     res.status(404).json({ error: 'No user registered with this email address' });
     return;
@@ -186,7 +226,7 @@ router.post('/auth/verify-otp', (req, res) => {
     const attempts = (user.otpFailedAttempts || 0) + 1;
     if (attempts >= 5) {
       const lockoutTime = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-      db.updateUser(user.id, {
+      await db.updateUser(user.id, {
         otpFailedAttempts: 0,
         otpLockoutUntil: lockoutTime
       });
@@ -195,7 +235,7 @@ router.post('/auth/verify-otp', (req, res) => {
         lockoutUntil: lockoutTime
       });
     } else {
-      db.updateUser(user.id, {
+      await db.updateUser(user.id, {
         otpFailedAttempts: attempts
       });
       res.status(400).json({ error: 'Incorrect code' });
@@ -211,7 +251,7 @@ router.post('/auth/verify-otp', (req, res) => {
   res.json({ message: 'OTP verified successfully' });
 });
 
-router.post('/auth/reset-password', (req, res) => {
+router.post('/auth/reset-password', async (req, res) => {
   const { email, otp, newPassword } = req.body;
 
   if (!email || !otp || !newPassword) {
@@ -219,7 +259,7 @@ router.post('/auth/reset-password', (req, res) => {
     return;
   }
 
-  const user = db.getUserByEmail(email);
+  const user = await db.getUserByEmail(email);
   if (!user) {
     res.status(404).json({ error: 'No user registered with this email address' });
     return;
@@ -240,7 +280,7 @@ router.post('/auth/reset-password', (req, res) => {
     const attempts = (user.otpFailedAttempts || 0) + 1;
     if (attempts >= 5) {
       const lockoutTime = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-      db.updateUser(user.id, {
+      await db.updateUser(user.id, {
         otpFailedAttempts: 0,
         otpLockoutUntil: lockoutTime
       });
@@ -249,7 +289,7 @@ router.post('/auth/reset-password', (req, res) => {
         lockoutUntil: lockoutTime
       });
     } else {
-      db.updateUser(user.id, {
+      await db.updateUser(user.id, {
         otpFailedAttempts: attempts
       });
       res.status(400).json({ error: 'Incorrect code' });
@@ -263,7 +303,7 @@ router.post('/auth/reset-password', (req, res) => {
   }
 
   const passwordHash = bcryptjs.hashSync(newPassword, 10);
-  db.updateUser(user.id, {
+  await db.updateUser(user.id, {
     passwordHash,
     otp: undefined,
     otpExpiresAt: undefined,
@@ -283,8 +323,8 @@ router.get('/auth/me', authenticateToken, (req: AuthenticatedRequest, res) => {
 // ----------------------------------------------------
 
 // Get all projects (public ones, plus owner's private ones if authenticated)
-router.get('/projects', optionalAuthenticateToken, (req: AuthenticatedRequest, res) => {
-  const allProjects = db.getProjects();
+router.get('/projects', optionalAuthenticateToken, async (req: AuthenticatedRequest, res) => {
+  const allProjects = await db.getProjects();
   const userId = req.user?.id;
 
   const visibleProjects = allProjects.filter(
@@ -295,15 +335,15 @@ router.get('/projects', optionalAuthenticateToken, (req: AuthenticatedRequest, r
 });
 
 // Get user's own projects
-router.get('/projects/my', authenticateToken, (req: AuthenticatedRequest, res) => {
+router.get('/projects/my', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const userId = req.user!.id;
-  const myProjects = db.getProjectsByOwner(userId);
+  const myProjects = await db.getProjectsByOwner(userId);
   res.json({ projects: myProjects });
 });
 
 // Get a single project
-router.get('/projects/:id', optionalAuthenticateToken, (req: AuthenticatedRequest, res) => {
-  const project = db.getProjectById(req.params.id as string);
+router.get('/projects/:id', optionalAuthenticateToken, async (req: AuthenticatedRequest, res) => {
+  const project = await db.getProjectById(req.params.id as string);
   
   if (!project) {
     res.status(404).json({ error: 'Project not found' });
@@ -320,7 +360,7 @@ router.get('/projects/:id', optionalAuthenticateToken, (req: AuthenticatedReques
 });
 
 // Create a project
-router.post('/projects', authenticateToken, (req: AuthenticatedRequest, res) => {
+router.post('/projects', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const { name, description, isPublic, tailwindConfig } = req.body;
   const userId = req.user!.id;
 
@@ -339,13 +379,13 @@ router.post('/projects', authenticateToken, (req: AuthenticatedRequest, res) => 
     createdAt: new Date().toISOString()
   };
 
-  db.addProject(newProject);
+  await db.addProject(newProject);
   res.status(201).json({ project: newProject });
 });
 
 // Update a project
-router.put('/projects/:id', authenticateToken, (req: AuthenticatedRequest, res) => {
-  const project = db.getProjectById(req.params.id as string);
+router.put('/projects/:id', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const project = await db.getProjectById(req.params.id as string);
   const userId = req.user!.id;
 
   if (!project) {
@@ -360,7 +400,7 @@ router.put('/projects/:id', authenticateToken, (req: AuthenticatedRequest, res) 
 
   const { name, description, isPublic, tailwindConfig } = req.body;
   
-  const updated = db.updateProject(req.params.id as string, {
+  const updated = await db.updateProject(req.params.id as string, {
     name: name !== undefined ? name : project.name,
     description: description !== undefined ? description : project.description,
     isPublic: isPublic !== undefined ? isPublic : project.isPublic,
@@ -371,8 +411,8 @@ router.put('/projects/:id', authenticateToken, (req: AuthenticatedRequest, res) 
 });
 
 // Delete a project
-router.delete('/projects/:id', authenticateToken, (req: AuthenticatedRequest, res) => {
-  const project = db.getProjectById(req.params.id as string);
+router.delete('/projects/:id', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const project = await db.getProjectById(req.params.id as string);
   const userId = req.user!.id;
 
   if (!project) {
@@ -385,7 +425,7 @@ router.delete('/projects/:id', authenticateToken, (req: AuthenticatedRequest, re
     return;
   }
 
-  db.deleteProject(req.params.id as string);
+  await db.deleteProject(req.params.id as string);
   res.json({ message: 'Project deleted successfully' });
 });
 
@@ -394,8 +434,8 @@ router.delete('/projects/:id', authenticateToken, (req: AuthenticatedRequest, re
 // ----------------------------------------------------
 
 // Get components for a project
-router.get('/projects/:projectId/components', optionalAuthenticateToken, (req: AuthenticatedRequest, res) => {
-  const project = db.getProjectById(req.params.projectId as string);
+router.get('/projects/:projectId/components', optionalAuthenticateToken, async (req: AuthenticatedRequest, res) => {
+  const project = await db.getProjectById(req.params.projectId as string);
   
   if (!project) {
     res.status(404).json({ error: 'Project not found' });
@@ -408,19 +448,19 @@ router.get('/projects/:projectId/components', optionalAuthenticateToken, (req: A
     return;
   }
 
-  const components = db.getComponents(req.params.projectId as string);
+  const components = await db.getComponents(req.params.projectId as string);
   res.json({ components });
 });
 
 // Get single component details
-router.get('/components/:id', optionalAuthenticateToken, (req: AuthenticatedRequest, res) => {
-  const component = db.getComponentById(req.params.id as string);
+router.get('/components/:id', optionalAuthenticateToken, async (req: AuthenticatedRequest, res) => {
+  const component = await db.getComponentById(req.params.id as string);
   if (!component) {
     res.status(404).json({ error: 'Component not found' });
     return;
   }
 
-  const project = db.getProjectById(component.projectId);
+  const project = await db.getProjectById(component.projectId);
   if (!project) {
     res.status(404).json({ error: 'Associated project not found' });
     return;
@@ -436,8 +476,8 @@ router.get('/components/:id', optionalAuthenticateToken, (req: AuthenticatedRequ
 });
 
 // Add a component to a project
-router.post('/projects/:projectId/components', authenticateToken, (req: AuthenticatedRequest, res) => {
-  const project = db.getProjectById(req.params.projectId as string);
+router.post('/projects/:projectId/components', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const project = await db.getProjectById(req.params.projectId as string);
   const userId = req.user!.id;
 
   if (!project) {
@@ -474,13 +514,13 @@ router.post('/projects/:projectId/components', authenticateToken, (req: Authenti
     updatedAt: new Date().toISOString()
   };
 
-  db.addComponent(newComponent);
+  await db.addComponent(newComponent);
   res.status(201).json({ component: newComponent });
 });
 
 // Update a component
-router.put('/components/:id', authenticateToken, (req: AuthenticatedRequest, res) => {
-  const component = db.getComponentById(req.params.id as string);
+router.put('/components/:id', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const component = await db.getComponentById(req.params.id as string);
   const userId = req.user!.id;
 
   if (!component) {
@@ -488,7 +528,7 @@ router.put('/components/:id', authenticateToken, (req: AuthenticatedRequest, res
     return;
   }
 
-  const project = db.getProjectById(component.projectId);
+  const project = await db.getProjectById(component.projectId);
   if (!project || project.ownerId !== userId) {
     res.status(403).json({ error: 'You are not authorized to update this component' });
     return;
@@ -498,13 +538,11 @@ router.put('/components/:id', authenticateToken, (req: AuthenticatedRequest, res
 
   let finalProps = props;
   
-  // If the user modified the code AND specified to auto-parse, OR did not supply props,
-  // we automatically re-parse the props from the updated code.
   if (code && (autoParse || !props)) {
     finalProps = parsePropsFromCode(code);
   }
 
-  const updated = db.updateComponent(req.params.id as string, {
+  const updated = await db.updateComponent(req.params.id as string, {
     name: name !== undefined ? name : component.name,
     description: description !== undefined ? description : component.description,
     code: code !== undefined ? code : component.code,
@@ -515,8 +553,8 @@ router.put('/components/:id', authenticateToken, (req: AuthenticatedRequest, res
 });
 
 // Delete a component
-router.delete('/components/:id', authenticateToken, (req: AuthenticatedRequest, res) => {
-  const component = db.getComponentById(req.params.id as string);
+router.delete('/components/:id', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const component = await db.getComponentById(req.params.id as string);
   const userId = req.user!.id;
 
   if (!component) {
@@ -524,13 +562,13 @@ router.delete('/components/:id', authenticateToken, (req: AuthenticatedRequest, 
     return;
   }
 
-  const project = db.getProjectById(component.projectId);
+  const project = await db.getProjectById(component.projectId);
   if (!project || project.ownerId !== userId) {
     res.status(403).json({ error: 'You are not authorized to delete this component' });
     return;
   }
 
-  db.deleteComponent(req.params.id as string);
+  await db.deleteComponent(req.params.id as string);
   res.json({ message: 'Component deleted successfully' });
 });
 
