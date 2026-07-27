@@ -1,0 +1,474 @@
+import { Router, Response } from 'express';
+import bcryptjs from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+import { db, User, Project, Component } from '../utils/db.js';
+import { parsePropsFromCode } from '../utils/parser.js';
+import { authenticateToken, optionalAuthenticateToken, AuthenticatedRequest } from '../middleware/auth.js';
+
+const router: Router = Router();
+const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-docs-hub';
+
+// ----------------------------------------------------
+// UTILITY / LIVE PARSE ENDPOINTS
+// ----------------------------------------------------
+
+// Live parse arbitrary code (for the interactive playground)
+router.post('/parse-code', (req, res) => {
+  const { code } = req.body;
+  if (typeof code !== 'string') {
+    res.status(400).json({ error: 'Code string is required' });
+    return;
+  }
+  try {
+    const props = parsePropsFromCode(code);
+    res.json({ props });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to parse code', details: error.message });
+  }
+});
+
+// ----------------------------------------------------
+// AUTH ENDPOINTS
+// ----------------------------------------------------
+
+router.post('/auth/register', (req, res) => {
+  const { username, email, password } = req.body;
+
+  if (!username || !email || !password) {
+    res.status(400).json({ error: 'Username, email, and password are required' });
+    return;
+  }
+
+  // Check if username or email already exists
+  if (db.getUserByUsername(username)) {
+    res.status(400).json({ error: 'Username is already taken' });
+    return;
+  }
+
+  if (db.getUserByEmail(email)) {
+    res.status(400).json({ error: 'Email is already registered' });
+    return;
+  }
+
+  const passwordHash = bcryptjs.hashSync(password, 10);
+  const newUser: User = {
+    id: crypto.randomUUID(),
+    username,
+    email,
+    passwordHash,
+    createdAt: new Date().toISOString()
+  };
+
+  db.addUser(newUser);
+
+  const token = jwt.sign(
+    { id: newUser.id, username: newUser.username, email: newUser.email },
+    JWT_SECRET,
+    { expiresIn: '30d' }
+  );
+
+  res.status(201).json({
+    token,
+    user: {
+      id: newUser.id,
+      username: newUser.username,
+      email: newUser.email
+    }
+  });
+});
+
+router.post('/auth/login', (req, res) => {
+  const { usernameOrEmail, password } = req.body;
+
+  if (!usernameOrEmail || !password) {
+    res.status(400).json({ error: 'Username/Email and password are required' });
+    return;
+  }
+
+  // Find user by username or email
+  let user = db.getUserByUsername(usernameOrEmail);
+  if (!user) {
+    user = db.getUserByEmail(usernameOrEmail);
+  }
+
+  if (!user || !bcryptjs.compareSync(password, user.passwordHash)) {
+    res.status(401).json({ error: 'Invalid username, email, or password' });
+    return;
+  }
+
+  const token = jwt.sign(
+    { id: user.id, username: user.username, email: user.email },
+    JWT_SECRET,
+    { expiresIn: '30d' }
+  );
+
+  res.json({
+    token,
+    user: {
+      id: user.id,
+      username: user.username,
+      email: user.email
+    }
+  });
+});
+
+router.post('/auth/forgot-password', (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    res.status(400).json({ error: 'Email is required' });
+    return;
+  }
+
+  const user = db.getUserByEmail(email);
+  if (!user) {
+    res.status(404).json({ error: 'No user registered with this email address' });
+    return;
+  }
+
+  // Check if user is locked out
+  if (user.otpLockoutUntil && new Date(user.otpLockoutUntil).getTime() > Date.now()) {
+    const timeLeft = Math.ceil((new Date(user.otpLockoutUntil).getTime() - Date.now()) / 1000);
+    const minutesLeft = Math.ceil(timeLeft / 60);
+    res.status(429).json({ error: `Resending code is disabled during lockout. Try again in ${minutesLeft} minute(s).` });
+    return;
+  }
+
+  // Generate 6-digit numeric OTP
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const otpExpiresAt = new Date(Date.now() + 60 * 1000).toISOString(); // 60 seconds expiry
+
+  db.updateUser(user.id, {
+    otp,
+    otpExpiresAt,
+    otpFailedAttempts: 0,
+    otpLockoutUntil: undefined
+  });
+
+  console.log(`[AUTH] OTP for resetting password of ${email}: ${otp}`);
+
+  res.json({
+    message: 'OTP sent successfully. Please check your email.',
+    email
+  });
+});
+
+router.post('/auth/reset-password', (req, res) => {
+  const { email, otp, newPassword } = req.body;
+
+  if (!email || !otp || !newPassword) {
+    res.status(400).json({ error: 'Email, OTP, and new password are required' });
+    return;
+  }
+
+  const user = db.getUserByEmail(email);
+  if (!user) {
+    res.status(404).json({ error: 'No user registered with this email address' });
+    return;
+  }
+
+  // Check if user is locked out
+  if (user.otpLockoutUntil && new Date(user.otpLockoutUntil).getTime() > Date.now()) {
+    const timeLeft = Math.ceil((new Date(user.otpLockoutUntil).getTime() - Date.now()) / 1000);
+    const minutesLeft = Math.ceil(timeLeft / 60);
+    res.status(429).json({ error: `Too many failed attempts. Try again in ${minutesLeft} minute(s).` });
+    return;
+  }
+
+  if (!user.otp || user.otp !== otp) {
+    const attempts = (user.otpFailedAttempts || 0) + 1;
+    if (attempts >= 5) {
+      const lockoutTime = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      db.updateUser(user.id, {
+        otpFailedAttempts: 0,
+        otpLockoutUntil: lockoutTime
+      });
+      res.status(429).json({ error: 'Too many failed attempts. You are locked out for 5 minutes.' });
+    } else {
+      db.updateUser(user.id, {
+        otpFailedAttempts: attempts
+      });
+      res.status(400).json({ error: `Invalid reset code. ${5 - attempts} attempt(s) remaining.` });
+    }
+    return;
+  }
+
+  if (!user.otpExpiresAt || new Date(user.otpExpiresAt).getTime() < Date.now()) {
+    res.status(400).json({ error: 'Reset code has expired. Please request a new one.' });
+    return;
+  }
+
+  const passwordHash = bcryptjs.hashSync(newPassword, 10);
+  db.updateUser(user.id, {
+    passwordHash,
+    otp: undefined,
+    otpExpiresAt: undefined,
+    otpFailedAttempts: 0,
+    otpLockoutUntil: undefined
+  });
+
+  res.json({ message: 'Password has been reset successfully' });
+});
+
+router.get('/auth/me', authenticateToken, (req: AuthenticatedRequest, res) => {
+  res.json({ user: req.user });
+});
+
+// ----------------------------------------------------
+// PROJECT ENDPOINTS
+// ----------------------------------------------------
+
+// Get all projects (public ones, plus owner's private ones if authenticated)
+router.get('/projects', optionalAuthenticateToken, (req: AuthenticatedRequest, res) => {
+  const allProjects = db.getProjects();
+  const userId = req.user?.id;
+
+  const visibleProjects = allProjects.filter(
+    p => p.isPublic || (userId && p.ownerId === userId)
+  );
+
+  res.json({ projects: visibleProjects });
+});
+
+// Get user's own projects
+router.get('/projects/my', authenticateToken, (req: AuthenticatedRequest, res) => {
+  const userId = req.user!.id;
+  const myProjects = db.getProjectsByOwner(userId);
+  res.json({ projects: myProjects });
+});
+
+// Get a single project
+router.get('/projects/:id', optionalAuthenticateToken, (req: AuthenticatedRequest, res) => {
+  const project = db.getProjectById(req.params.id as string);
+  
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  // Access control
+  if (!project.isPublic && (!req.user || project.ownerId !== req.user.id)) {
+    res.status(403).json({ error: 'Access denied to this private project' });
+    return;
+  }
+
+  res.json({ project });
+});
+
+// Create a project
+router.post('/projects', authenticateToken, (req: AuthenticatedRequest, res) => {
+  const { name, description, isPublic, tailwindConfig } = req.body;
+  const userId = req.user!.id;
+
+  if (!name) {
+    res.status(400).json({ error: 'Project name is required' });
+    return;
+  }
+
+  const newProject: Project = {
+    id: crypto.randomUUID(),
+    name,
+    description: description || '',
+    ownerId: userId,
+    isPublic: isPublic !== undefined ? isPublic : true,
+    tailwindConfig: tailwindConfig || '',
+    createdAt: new Date().toISOString()
+  };
+
+  db.addProject(newProject);
+  res.status(201).json({ project: newProject });
+});
+
+// Update a project
+router.put('/projects/:id', authenticateToken, (req: AuthenticatedRequest, res) => {
+  const project = db.getProjectById(req.params.id as string);
+  const userId = req.user!.id;
+
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  if (project.ownerId !== userId) {
+    res.status(403).json({ error: 'You are not authorized to update this project' });
+    return;
+  }
+
+  const { name, description, isPublic, tailwindConfig } = req.body;
+  
+  const updated = db.updateProject(req.params.id as string, {
+    name: name !== undefined ? name : project.name,
+    description: description !== undefined ? description : project.description,
+    isPublic: isPublic !== undefined ? isPublic : project.isPublic,
+    tailwindConfig: tailwindConfig !== undefined ? tailwindConfig : project.tailwindConfig
+  });
+
+  res.json({ project: updated });
+});
+
+// Delete a project
+router.delete('/projects/:id', authenticateToken, (req: AuthenticatedRequest, res) => {
+  const project = db.getProjectById(req.params.id as string);
+  const userId = req.user!.id;
+
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  if (project.ownerId !== userId) {
+    res.status(403).json({ error: 'You are not authorized to delete this project' });
+    return;
+  }
+
+  db.deleteProject(req.params.id as string);
+  res.json({ message: 'Project deleted successfully' });
+});
+
+// ----------------------------------------------------
+// COMPONENT ENDPOINTS
+// ----------------------------------------------------
+
+// Get components for a project
+router.get('/projects/:projectId/components', optionalAuthenticateToken, (req: AuthenticatedRequest, res) => {
+  const project = db.getProjectById(req.params.projectId as string);
+  
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  // Access control
+  if (!project.isPublic && (!req.user || project.ownerId !== req.user.id)) {
+    res.status(403).json({ error: 'Access denied to this project\'s components' });
+    return;
+  }
+
+  const components = db.getComponents(req.params.projectId as string);
+  res.json({ components });
+});
+
+// Get single component details
+router.get('/components/:id', optionalAuthenticateToken, (req: AuthenticatedRequest, res) => {
+  const component = db.getComponentById(req.params.id as string);
+  if (!component) {
+    res.status(404).json({ error: 'Component not found' });
+    return;
+  }
+
+  const project = db.getProjectById(component.projectId);
+  if (!project) {
+    res.status(404).json({ error: 'Associated project not found' });
+    return;
+  }
+
+  // Access control
+  if (!project.isPublic && (!req.user || project.ownerId !== req.user.id)) {
+    res.status(403).json({ error: 'Access denied to this component' });
+    return;
+  }
+
+  res.json({ component });
+});
+
+// Add a component to a project
+router.post('/projects/:projectId/components', authenticateToken, (req: AuthenticatedRequest, res) => {
+  const project = db.getProjectById(req.params.projectId as string);
+  const userId = req.user!.id;
+
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  if (project.ownerId !== userId) {
+    res.status(403).json({ error: 'You are not authorized to add components to this project' });
+    return;
+  }
+
+  const { name, description, code, props } = req.body;
+
+  if (!name || !code) {
+    res.status(400).json({ error: 'Component name and code are required' });
+    return;
+  }
+
+  // Parse props from code automatically, or merge/use user-submitted ones if provided
+  let finalProps = props;
+  if (!finalProps || !Array.isArray(finalProps)) {
+    finalProps = parsePropsFromCode(code);
+  }
+
+  const newComponent: Component = {
+    id: crypto.randomUUID(),
+    projectId: req.params.projectId as string,
+    name,
+    description: description || '',
+    code,
+    props: finalProps,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  db.addComponent(newComponent);
+  res.status(201).json({ component: newComponent });
+});
+
+// Update a component
+router.put('/components/:id', authenticateToken, (req: AuthenticatedRequest, res) => {
+  const component = db.getComponentById(req.params.id as string);
+  const userId = req.user!.id;
+
+  if (!component) {
+    res.status(404).json({ error: 'Component not found' });
+    return;
+  }
+
+  const project = db.getProjectById(component.projectId);
+  if (!project || project.ownerId !== userId) {
+    res.status(403).json({ error: 'You are not authorized to update this component' });
+    return;
+  }
+
+  const { name, description, code, props, autoParse } = req.body;
+
+  let finalProps = props;
+  
+  // If the user modified the code AND specified to auto-parse, OR did not supply props,
+  // we automatically re-parse the props from the updated code.
+  if (code && (autoParse || !props)) {
+    finalProps = parsePropsFromCode(code);
+  }
+
+  const updated = db.updateComponent(req.params.id as string, {
+    name: name !== undefined ? name : component.name,
+    description: description !== undefined ? description : component.description,
+    code: code !== undefined ? code : component.code,
+    props: finalProps !== undefined ? finalProps : component.props
+  });
+
+  res.json({ component: updated });
+});
+
+// Delete a component
+router.delete('/components/:id', authenticateToken, (req: AuthenticatedRequest, res) => {
+  const component = db.getComponentById(req.params.id as string);
+  const userId = req.user!.id;
+
+  if (!component) {
+    res.status(404).json({ error: 'Component not found' });
+    return;
+  }
+
+  const project = db.getProjectById(component.projectId);
+  if (!project || project.ownerId !== userId) {
+    res.status(403).json({ error: 'You are not authorized to delete this component' });
+    return;
+  }
+
+  db.deleteComponent(req.params.id as string);
+  res.json({ message: 'Component deleted successfully' });
+});
+
+export default router;
