@@ -97,37 +97,38 @@ function ResetPasswordContent() {
       setTimeout(() => {
         router.push("/login");
       }, 2000);
-    } catch (err: any) {
-      setErrors({ form: err.message || "Failed to reset password. Please check your reset link and try again." });
+    } catch (err: unknown) {
+      const error = err as { message?: string };
+      setErrors({ form: error.message || "Failed to reset password. Please check your reset link and try again." });
     } finally {
       setActionLoading(false);
     }
   };
 
   return (
-    <div className="w-full max-w-sm p-6 rounded-3xl border border-golden-chestnut-200 bg-white shadow-sm shadow-rosy-copper-600/5">
-      <h2 className="text-xl font-bold text-golden-chestnut-950 mb-1 text-center font-serif">
+    <div className="w-full max-w-sm p-6 rounded-2xl border border-golden-chestnut-200 bg-white shadow-xs">
+      <h2 className="text-xl font-bold text-golden-chestnut-950 mb-1 text-center">
         New Credentials
       </h2>
-      <p className="text-sm text-graphite-500 mb-3 text-center">
+      <p className="text-xs text-graphite-500 mb-4 text-center">
         Enter your new secure password
       </p>
 
       {infoMessage && (
-        <div className="p-3 rounded-lg bg-golden-chestnut-100/60 border border-golden-chestnut-200 text-golden-chestnut-800 text-sm mb-3">
+        <div className="p-3 rounded-xl bg-golden-chestnut-100/60 border border-golden-chestnut-200 text-golden-chestnut-800 text-xs font-semibold mb-3">
           {infoMessage}
         </div>
       )}
 
       {errors.form && (
-        <div className="p-3 rounded-lg bg-oxblood-50 border border-oxblood-100 text-oxblood-700 text-sm mb-3">
+        <div className="p-3 rounded-xl bg-oxblood-50 border border-oxblood-105 text-oxblood-705 text-xs font-semibold mb-3 animate-shake">
           {errors.form}
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-3">
+      <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
             New Password
           </label>
           <div className="relative">
@@ -140,10 +141,10 @@ function ResetPasswordContent() {
               value={form.password}
               onChange={(e) => handleChange("password", e.target.value)}
               onBlur={handleConfirmPasswordBlur}
-              className={`w-full pl-3 pr-10 py-2 rounded-xl bg-golden-chestnut-50 text-golden-chestnut-900 text-base focus:ring-1 outline-none transition border ${
+              className={`w-full pl-3 pr-10 py-2 rounded-xl bg-golden-chestnut-50 text-golden-chestnut-950 text-xs focus:border-rosy-copper-600 focus:ring-2 focus:ring-rosy-copper-600/10 outline-none transition border ${
                 errors.password
                   ? "border-oxblood-500 focus:border-oxblood-600 focus:ring-oxblood-600/20"
-                  : "border-golden-chestnut-200 focus:border-rosy-copper-600 focus:ring-rosy-copper-600/20"
+                  : "border-golden-chestnut-200"
               }`}
               placeholder="••••••••"
             />
@@ -151,20 +152,20 @@ function ResetPasswordContent() {
               type="button"
               onClick={() => setShowPassword(!showPassword)}
               disabled={actionLoading}
-              className="absolute right-3 top-2.5 text-graphite-400 hover:text-graphite-700 cursor-pointer"
+              className="absolute right-3 top-2 text-graphite-400 hover:text-graphite-700 cursor-pointer"
             >
               {showPassword ? (
-                <ViewOffIcon className="w-5 h-5" />
+                <ViewOffIcon className="w-4 h-4" />
               ) : (
-                <ViewIcon className="w-5 h-5" />
+                <ViewIcon className="w-4 h-4" />
               )}
             </button>
           </div>
-          {errors.password && <p className="text-xs text-red-500 mt-1 font-semibold">{errors.password}</p>}
+          {errors.password && <p className="text-[10px] text-red-500 mt-1 font-semibold">{errors.password}</p>}
         </div>
 
         <div>
-          <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
             Confirm New Password
           </label>
           <div className="relative">
@@ -177,10 +178,10 @@ function ResetPasswordContent() {
               value={form.confirmPassword}
               onChange={(e) => handleChange("confirmPassword", e.target.value)}
               onBlur={handleConfirmPasswordBlur}
-              className={`w-full pl-3 pr-10 py-2 rounded-xl bg-golden-chestnut-50 text-golden-chestnut-900 text-base focus:ring-1 outline-none transition border ${
+              className={`w-full pl-3 pr-10 py-2 rounded-xl bg-golden-chestnut-50 text-golden-chestnut-950 text-xs focus:border-rosy-copper-600 focus:ring-2 focus:ring-rosy-copper-600/10 outline-none transition border ${
                 errors.confirmPassword
                   ? "border-oxblood-500 focus:border-oxblood-600 focus:ring-oxblood-600/20"
-                  : "border-golden-chestnut-200 focus:border-rosy-copper-600 focus:ring-rosy-copper-600/20"
+                  : "border-golden-chestnut-200"
               }`}
               placeholder="••••••••"
             />
@@ -188,30 +189,30 @@ function ResetPasswordContent() {
               type="button"
               onClick={() => setShowConfirmPassword(!showConfirmPassword)}
               disabled={actionLoading}
-              className="absolute right-3 top-2.5 text-graphite-400 hover:text-graphite-700 cursor-pointer"
+              className="absolute right-3 top-2 text-graphite-400 hover:text-graphite-700 cursor-pointer"
             >
               {showConfirmPassword ? (
-                <ViewOffIcon className="w-5 h-5" />
+                <ViewOffIcon className="w-4 h-4" />
               ) : (
-                <ViewIcon className="w-5 h-5" />
+                <ViewIcon className="w-4 h-4" />
               )}
             </button>
           </div>
-          {errors.confirmPassword && <p className="text-xs text-red-500 mt-1 font-semibold">{errors.confirmPassword}</p>}
+          {errors.confirmPassword && <p className="text-[10px] text-red-500 mt-1.5 font-semibold">{errors.confirmPassword}</p>}
         </div>
 
         <button
           type="submit"
           disabled={actionLoading}
-          className={`w-full py-2.5 rounded-xl font-bold text-white transition flex items-center justify-center text-base ${
+          className={`w-full py-2.5 rounded-xl font-bold text-white transition flex items-center justify-center text-xs ${
             actionLoading
-              ? "bg-rosy-copper-600/75 cursor-not-allowed"
-              : "bg-rosy-copper-600 hover:bg-rosy-copper-700 cursor-pointer"
+              ? "bg-rosy-copper-500/75 cursor-not-allowed"
+              : "bg-rosy-copper-600 hover:bg-rosy-copper-755 cursor-pointer shadow-xs active:scale-95"
           }`}
         >
           {actionLoading ? (
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
               <span>Updating...</span>
             </div>
           ) : (
@@ -220,10 +221,10 @@ function ResetPasswordContent() {
         </button>
       </form>
 
-      <div className="mt-4 pt-3.5 border-t border-golden-chestnut-200 text-center">
+      <div className="mt-4 pt-3.5 border-t border-golden-chestnut-100 text-center">
         <Link
           href="/login"
-          className="text-base text-rosy-copper-600 hover:text-rosy-copper-700 font-semibold cursor-pointer"
+          className="text-xs text-rosy-copper-600 hover:text-rosy-copper-750 font-semibold cursor-pointer"
         >
           Back to Sign In
         </Link>
@@ -234,11 +235,11 @@ function ResetPasswordContent() {
 
 export default function ResetPasswordPage() {
   return (
-    <div className="min-h-screen flex flex-col bg-golden-chestnut-50 text-golden-chestnut-900">
-      <div className="flex-1 flex items-center justify-center bg-golden-chestnut-100/40 px-6 py-4">
+    <div className="min-h-screen flex flex-col bg-golden-chestnut-50 text-golden-chestnut-900 selection:bg-golden-chestnut-200 selection:text-golden-chestnut-950 font-sans">
+      <div className="flex-1 flex items-center justify-center px-6 py-4">
         <Suspense fallback={
-          <div className="w-full max-w-sm p-6 rounded-3xl border border-golden-chestnut-200 bg-white shadow-sm flex justify-center py-12">
-            <div className="w-8 h-8 border-4 border-golden-chestnut-200 border-t-rosy-copper-600 rounded-full animate-spin"></div>
+          <div className="w-full max-w-sm p-6 rounded-2xl border border-golden-chestnut-200 bg-white shadow-xs flex justify-center py-12">
+            <div className="w-6 h-6 border-2 border-golden-chestnut-200 border-t-rosy-copper-600 rounded-full animate-spin"></div>
           </div>
         }>
           <ResetPasswordContent />
