@@ -3,14 +3,13 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import Editor from "@monaco-editor/react";
+import Editor, { OnMount } from "@monaco-editor/react";
 import { z } from "zod";
 import {
   api,
   Project,
   ComponentItem,
   User,
-  tokenStorage,
 } from "../../../utils/api";
 
 import {
@@ -18,10 +17,7 @@ import {
   Search01Icon,
   CodeIcon,
   Copy01Icon,
-  Delete01Icon,
   Share01Icon,
-  Globe02Icon,
-  LockIcon,
   Settings01Icon,
   Logout01Icon,
   Cancel01Icon,
@@ -41,54 +37,97 @@ const componentSchema = z.object({
   code: z.string().min(10, "Component code must be at least 10 characters"),
 });
 
-// Default Component Starter Template with Terracotta Accent
-const DEFAULT_COMPONENT_CODE = `import React from 'react';
-
-interface ButtonProps {
-  /** The text to display inside the button */
-  label: string;
-  /** Whether the button should be in secondary style */
-  secondary?: boolean;
-  /** Disables the button from interactions */
-  disabled?: boolean;
-  /** Size of the button */
-  size?: 'sm' | 'md' | 'lg';
+function detectLanguage(code: string): "typescript" | "javascript" | "html" | "css" {
+  if (!code) return "typescript";
+  const cleanCode = code.trim();
+  if (cleanCode.startsWith("<!--") || cleanCode.toLowerCase().startsWith("<!doctype") || cleanCode.startsWith("<div") || cleanCode.startsWith("<button")) {
+    return "html";
+  }
+  const firstLines = code.split("\n").slice(0, 3).join("\n");
+  const match = firstLines.match(/@language:\s*(typescript|tsx|javascript|jsx|html|css)/i);
+  if (match) {
+    const lang = match[1].toLowerCase();
+    if (lang === "tsx" || lang === "typescript") return "typescript";
+    if (lang === "jsx" || lang === "javascript") return "javascript";
+    if (lang === "html") return "html";
+    if (lang === "css") return "css";
+  }
+  return "typescript";
 }
 
-export const Button = ({
-  label = 'Click Me',
-  secondary = false,
-  disabled = false,
-  size = 'md'
-}: ButtonProps) => {
-  const sizeClasses = {
-    sm: 'px-3 py-1.5 text-xs',
-    md: 'px-4.5 py-2 text-sm',
-    lg: 'px-6 py-3 text-base',
-  }[size];
+const TEMPLATES = {
+  typescript: `import React from 'react';
 
-  const variantClasses = secondary
-    ? 'bg-rosy-copper-50/10 hover:bg-[#f8f1ec] text-[#25180e] border border-golden-chestnut-200'
-    : 'bg-[#c45d3b] hover:bg-[#9d4a2f] text-white border-transparent';
+interface CardProps {
+  title: string;
+  subtitle?: string;
+  content?: string;
+}
 
-  const disabledClasses = disabled
-    ? 'opacity-40 cursor-not-allowed pointer-events-none'
-    : 'cursor-pointer active:scale-98';
-
+export const CustomCard = ({
+  title = 'Design Token Workspace',
+  subtitle = 'Collaborative Sandbox',
+  content = 'Scaffold renders components from source code in an isolated viewport playground. Edit types and HTML structure to see updates in real-time.'
+}: CardProps) => {
   return (
-    <button
-      disabled={disabled}
-      className={\`font-semibold rounded-lg transition-all duration-150 outline-none focus:ring-2 focus:ring-rosy-copper-500/35 \${sizeClasses} \${variantClasses} \${disabledClasses}\`}
-    >
-      {label}
-    </button>
+    <div className="p-6 rounded-2xl bg-white border border-golden-chestnut-200/80 shadow-2xs max-w-sm text-left">
+      <h3 className="text-sm font-bold text-golden-chestnut-950">{title}</h3>
+      <span className="text-[10px] text-rosy-copper-650 font-semibold block mt-0.5">{subtitle}</span>
+      <p className="text-xs text-graphite-500 leading-relaxed mt-2.5">{content}</p>
+    </div>
   );
+};`,
+
+  javascript: `import React from 'react';
+
+export const CustomCard = ({
+  title = 'Design Token Workspace',
+  subtitle = 'Collaborative Sandbox',
+  content = 'Scaffold renders components from source code in an isolated playground.'
+}) => {
+  return (
+    <div className="p-6 rounded-2xl bg-white border border-golden-chestnut-200/80 shadow-2xs max-w-sm text-left font-sans">
+      <h3 className="text-sm font-bold text-golden-chestnut-950">{title}</h3>
+      <span className="text-[10px] text-rosy-copper-650 font-semibold block mt-0.5">{subtitle}</span>
+      <p className="text-xs text-graphite-500 leading-relaxed mt-2.5">{content}</p>
+    </div>
+  );
+};`,
+
+  html: `<!-- @language: html -->
+<div class="p-6 rounded-2xl bg-white border border-golden-chestnut-200/80 shadow-2xs max-w-sm text-left font-sans">
+  <h3 class="text-sm font-bold text-golden-chestnut-950">Design Token Workspace</h3>
+  <span class="text-[10px] text-rosy-copper-600 font-semibold block mt-0.5">HTML / Tailwind Mockup</span>
+  <p class="text-xs text-graphite-500 leading-relaxed mt-2.5">
+    This component is authored directly in plain HTML using Tailwind utility classes.
+  </p>
+</div>`,
+
+  css: `/* @language: css */
+.custom-card {
+  padding: 1.5rem;
+  border-radius: 1rem;
+  background-color: white;
+  border: 1px solid #e0d0c3;
+  max-width: 24rem;
+  text-align: left;
+}
+.custom-card h3 {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #2b170c;
+  margin: 0;
+}`
 };
-`;
+
+const DEFAULT_COMPONENT_CODE = TEMPLATES.typescript;
+
 
 interface PageProps {
   params: Promise<{ id: string }>;
 }
+
+type PropValue = string | number | boolean;
 
 export default function ProjectWorkspacePage({ params }: PageProps) {
   const router = useRouter();
@@ -107,7 +146,9 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
   const [searchQuery, setSearchQuery] = useState("");
 
   // Modals & Forms
-  const [componentModalOpen, setComponentModalOpen] = useState(false);
+    const [editorLanguage, setEditorLanguage] = useState<"typescript" | "javascript" | "html" | "css">("typescript");
+  const [modalLanguage, setModalLanguage] = useState<"typescript" | "javascript" | "html" | "css">("typescript");
+const [componentModalOpen, setComponentModalOpen] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [componentForm, setComponentForm] = useState({ name: "", description: "", code: DEFAULT_COMPONENT_CODE });
   const [projectForm, setProjectForm] = useState({ name: "", description: "", isPublic: true, tailwindConfig: "" });
@@ -117,19 +158,37 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
   const [activeTab, setActiveTab] = useState<"playground" | "tailwind">("playground");
   const [editorCode, setEditorCode] = useState("");
   const [previewViewport, setPreviewViewport] = useState<"mobile" | "tablet" | "desktop">("desktop");
-  const [propValues, setPropValues] = useState<Record<string, any>>({});
+  const [propValues, setPropValues] = useState<Record<string, PropValue>>({});
   const [iframeReady, setIframeReady] = useState(false);
   const [shareLink, setShareLink] = useState("");
   const [copiedPropSnippet, setCopiedPropSnippet] = useState(false);
   const [copiedShareLink, setCopiedShareLink] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const mainEditorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const modalEditorRef = useRef<Parameters<OnMount>[0] | null>(null);
+
+  const handleMainEditorDidMount: OnMount = (editor) => {
+    mainEditorRef.current = editor;
+  };
+
+  const handleModalEditorDidMount: OnMount = (editor) => {
+    modalEditorRef.current = editor;
+  };
+
+  // Ref-based debounce to satisfy eslint immutability rules
+  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const debouncedSetEditorCode = (val: string) => {
+    if (debounceTimeoutRef.current) {
+      clearTimeout(debounceTimeoutRef.current);
+    }
+    debounceTimeoutRef.current = setTimeout(() => {
+      setEditorCode(val);
+    }, 250);
+  };
 
   // Authenticate on mount & load project files
   useEffect(() => {
-    const token = tokenStorage.getToken();
-    
-    setLoading(true);
     api
       .getMe()
       .then(({ user }) => {
@@ -167,7 +226,7 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
               setActiveComponent(components[0] || null);
             }
           })
-          .catch((publicErr) => {
+          .catch(() => {
             setGlobalError("Access Denied. Project is private or does not exist.");
           });
       })
@@ -179,11 +238,12 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
   // Sync component code and parameters controls
   useEffect(() => {
     if (activeComponent) {
-      setEditorCode(activeComponent.code);
-      const initialProps: Record<string, any> = {};
+      const code = activeComponent.code;
+      const detected = detectLanguage(code);
+      const initialProps: Record<string, PropValue> = {};
       activeComponent.props.forEach((p) => {
         if (p.defaultValue !== undefined) {
-          let cleanVal: any = p.defaultValue;
+          let cleanVal: PropValue = p.defaultValue;
           if (cleanVal === "true") cleanVal = true;
           else if (cleanVal === "false") cleanVal = false;
           else if (!isNaN(Number(cleanVal)) && cleanVal.trim() !== "") cleanVal = Number(cleanVal);
@@ -196,11 +256,18 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
           else initialProps[p.name] = "";
         }
       });
-      setPropValues(initialProps);
-      setIframeReady(false);
+
+      Promise.resolve().then(() => {
+        setEditorLanguage(detected);
+        setEditorCode(code);
+        setPropValues(initialProps);
+        setIframeReady(false);
+      });
     } else {
-      setEditorCode("");
-      setPropValues({});
+      Promise.resolve().then(() => {
+        setEditorCode("");
+        setPropValues({});
+      });
     }
   }, [activeComponent]);
 
@@ -214,6 +281,7 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
             code: editorCode,
             name: activeComponent.name,
             tailwindConfig: activeProject?.tailwindConfig || "",
+            language: editorLanguage,
           },
           "*"
         );
@@ -229,7 +297,7 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
       const t = setTimeout(sendLoadMessage, 400);
       return () => clearTimeout(t);
     }
-  }, [editorCode, activeComponent, iframeReady, activeProject?.tailwindConfig]);
+  }, [editorCode, activeComponent, iframeReady, activeProject?.tailwindConfig, editorLanguage, propValues]);
 
   // Send properties update to iframe sandbox
   useEffect(() => {
@@ -258,7 +326,11 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
   const handleCreateComponent = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormErrors({});
-    const validation = componentSchema.safeParse(componentForm);
+    const currentCode = modalEditorRef.current ? modalEditorRef.current.getValue() : DEFAULT_COMPONENT_CODE;
+    const validation = componentSchema.safeParse({
+      ...componentForm,
+      code: currentCode
+    });
     if (!validation.success) {
       const errors: Record<string, string> = {};
       validation.error.issues.forEach((issue) => {
@@ -269,19 +341,34 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
     }
 
     setActionLoading(true);
+    // Prepend language metadata comment if not present
+    let finalCode = currentCode;
+    const hasMetadata = finalCode.includes("@language:");
+    if (!hasMetadata) {
+      if (modalLanguage === "typescript") {
+        finalCode = `// @language: tsx\n` + finalCode;
+      } else if (modalLanguage === "javascript") {
+        finalCode = `// @language: jsx\n` + finalCode;
+      } else if (modalLanguage === "html") {
+        finalCode = `<!-- @language: html -->\n` + finalCode;
+      } else if (modalLanguage === "css") {
+        finalCode = `/* @language: css */\n` + finalCode;
+      }
+    }
     try {
       const { component } = await api.createComponent(
         projectId,
         componentForm.name,
         componentForm.description,
-        componentForm.code
+        finalCode
       );
       setComponents([component, ...components]);
       setActiveComponent(component);
       setComponentModalOpen(false);
       setComponentForm({ name: "", description: "", code: DEFAULT_COMPONENT_CODE });
-    } catch (err: any) {
-      setFormErrors({ form: err.message || "Failed to save component" });
+    } catch (err: unknown) {
+      const error = err as { message?: string };
+      setFormErrors({ form: error.message || "Failed to save component" });
     } finally {
       setActionLoading(false);
     }
@@ -289,16 +376,33 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
 
   const handleUpdateComponentCode = async () => {
     if (!activeComponent) return;
+    let currentCode = mainEditorRef.current ? mainEditorRef.current.getValue() : editorCode;
+    
+    // Synchronize language metadata
+    // Remove existing language tags at the top
+    currentCode = currentCode.replace(/^(?:\s*(?:\/\/\s*@language:\s*\w+\n*)|(?:\/\*\s*@language:\s*\w+\s*\*\/\n*)|(?:<!--\s*@language:\s*\w+\s*-->\n*))/, "");
+    if (editorLanguage === "typescript") {
+      currentCode = `// @language: tsx\n` + currentCode;
+    } else if (editorLanguage === "javascript") {
+      currentCode = `// @language: jsx\n` + currentCode;
+    } else if (editorLanguage === "html") {
+      currentCode = `<!-- @language: html -->\n` + currentCode;
+    } else if (editorLanguage === "css") {
+      currentCode = `/* @language: css */\n` + currentCode;
+    }
+
     setActionLoading(true);
     try {
       const { component } = await api.updateComponent(activeComponent.id, {
-        code: editorCode,
+        code: currentCode,
         autoParse: true,
       });
       setActiveComponent(component);
-      setComponents(components.map((c) => (c.id === component.id ? component : c)));
-    } catch (err: any) {
-      setGlobalError(err.message || "Failed to save changes");
+      setComponents(components.map((c) => (c.id === component.id ? { ...component, code: currentCode } : c)));
+      setEditorCode(currentCode);
+    } catch (err: unknown) {
+      const error = err as { message?: string };
+      setGlobalError(error.message || "Failed to save changes");
     } finally {
       setActionLoading(false);
     }
@@ -311,8 +415,9 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
       const remaining = components.filter((c) => c.id !== id);
       setComponents(remaining);
       setActiveComponent(remaining[0] || null);
-    } catch (err: any) {
-      setGlobalError(err.message || "Failed to delete component");
+    } catch (err: unknown) {
+      const error = err as { message?: string };
+      setGlobalError(error.message || "Failed to delete component");
     }
   };
 
@@ -324,14 +429,15 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
         tailwindConfig: projectForm.tailwindConfig,
       });
       setActiveProject(project);
-    } catch (err: any) {
-      setGlobalError(err.message || "Failed to update Tailwind Configuration");
+    } catch (err: unknown) {
+      const error = err as { message?: string };
+      setGlobalError(error.message || "Failed to update Tailwind Configuration");
     } finally {
       setActionLoading(false);
     }
   };
 
-  const handlePropChange = (name: string, value: any) => {
+  const handlePropChange = (name: string, value: PropValue) => {
     setPropValues((prev) => ({
       ...prev,
       [name]: value,
@@ -434,7 +540,7 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
               <div class="font-bold mb-1 flex items-center gap-1.5 text-oxblood-800">
                 <span>⚠️ Runtime Error:</span>
               </div>
-              {err.message}
+              {error.message}
             </div>
           );
         }
@@ -443,7 +549,7 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
 
     window.addEventListener('message', (event) => {
       if (event.data.type === 'LOAD_COMPONENT') {
-        const { code, name, tailwindConfig } = event.data;
+        const { code, name, tailwindConfig, language } = event.data;
         try {
           if (tailwindConfig && tailwindConfig.trim()) {
             try {
@@ -451,6 +557,24 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
               tailwind.config = parsed;
             } catch (e) {
               console.error('Tailwind Configuration Error:', e);
+            }
+          }
+
+          if (language === 'html') {
+            code = 'function ' + name + '() { return (<React.Fragment>' + code + '</React.Fragment>); }';
+          } else if (language === 'css') {
+            let styleEl = document.getElementById('custom-css-preview');
+            if (!styleEl) {
+              styleEl = document.createElement('style');
+              styleEl.id = 'custom-css-preview';
+              document.head.appendChild(styleEl);
+            }
+            styleEl.textContent = code;
+            code = 'function ' + name + '() { return <div className="text-graphite-450 text-xs italic p-4 text-center">CSS Stylesheet Active</div>; }';
+          } else {
+            let styleEl = document.getElementById('custom-css-preview');
+            if (styleEl) {
+              styleEl.textContent = '';
             }
           }
 
@@ -493,7 +617,7 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
               <div class="font-bold mb-1 flex items-center gap-1.5 text-oxblood-800">
                 <span>❌ Compile Error:</span>
               </div>
-              \\\${err.message}
+              \\\${error.message}
             </div>
           \`;
         }
@@ -522,8 +646,8 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
     return (
       <div className="min-h-screen flex flex-col bg-golden-chestnut-50 text-golden-chestnut-900 items-center justify-center p-6 text-center max-w-sm mx-auto">
         <Cancel01Icon className="w-10 h-10 text-oxblood-700 mb-4 animate-bounce" />
-        <h2 className="text-lg font-bold text-golden-chestnut-950 mb-2 font-serif">Workspace Blocked</h2>
-        <p className="text-xs text-graphite-550 mb-6">{globalError}</p>
+        <h2 className="text-lg font-bold text-golden-chestnut-950 mb-2">Workspace Blocked</h2>
+        <p className="text-xs text-graphite-500 mb-6">{globalError}</p>
         <Link
           href="/dashboard"
           className="px-5 py-2.5 rounded-xl text-xs font-bold bg-rosy-copper-600 text-white hover:bg-rosy-copper-700"
@@ -535,32 +659,33 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-golden-chestnut-50 text-golden-chestnut-900">
+    <div className="flex flex-col min-h-screen bg-golden-chestnut-50 text-golden-chestnut-900 selection:bg-golden-chestnut-200 selection:text-golden-chestnut-950 font-sans">
       {/* Header */}
       <header className="sticky top-0 z-40 w-full border-b border-golden-chestnut-200 bg-golden-chestnut-50">
-        <div className="container mx-auto px-6 max-w-4xl h-16 flex items-center justify-between">
+        <div className="container mx-auto px-6 max-w-6xl h-16 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
-            <span className="text-xl font-bold tracking-tight text-rosy-copper-600 font-serif">
+            <span className="text-xl font-bold tracking-tight text-rosy-copper-600">
               Scaffold
             </span>
           </Link>
 
           <nav className="flex items-center gap-4">
             <div className="flex items-center gap-3">
-              <Link
-                href="/dashboard"
-                className="px-4 py-2 rounded-xl text-sm font-bold border border-golden-chestnut-200 bg-white text-golden-chestnut-700 hover:bg-golden-chestnut-200 transition cursor-pointer"
-              >
-                Dashboard
-              </Link>
-              {user && (
+              {user ? (
                 <button
                   onClick={handleLogout}
-                  className="p-2 rounded-xl border border-golden-chestnut-200 bg-white hover:bg-oxblood-50 hover:text-oxblood-700 text-graphite-500 transition cursor-pointer"
+                  className="p-2 rounded-xl border border-golden-chestnut-200 bg-white hover:bg-oxblood-50 hover:text-oxblood-700 text-graphite-500 transition cursor-pointer shadow-xs"
                   title="Logout"
                 >
                   <Logout01Icon className="w-4 h-4" />
                 </button>
+              ) : (
+                <Link
+                  href="/login"
+                  className="px-4 py-2 rounded-xl text-xs font-bold border border-golden-chestnut-200 bg-white text-golden-chestnut-700 hover:bg-golden-chestnut-100 transition cursor-pointer shadow-xs"
+                >
+                  Sign In
+                </Link>
               )}
             </div>
           </nav>
@@ -574,18 +699,22 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
           <div className="p-4 border-b border-golden-chestnut-200">
             <Link
               href="/dashboard"
-              className="flex items-center gap-1 text-xs text-graphite-500 hover:text-graphite-800 font-bold uppercase tracking-wider cursor-pointer mb-4"
+              className="flex items-center gap-1 text-[10px] text-graphite-500 hover:text-graphite-800 font-bold uppercase tracking-wider cursor-pointer mb-4"
             >
               <ArrowLeft01Icon className="w-3.5 h-3.5" />
               Back to Dashboard
             </Link>
 
             <div className="flex items-center justify-between mb-1">
-              <h2 className="font-bold text-golden-chestnut-950 text-base truncate font-serif">{activeProject?.name}</h2>
+              <h2 className="font-bold text-golden-chestnut-950 text-base truncate">{activeProject?.name}</h2>
               {user && (
                 <button
-                  onClick={() => setComponentModalOpen(true)}
-                  className="p-1.5 rounded-lg bg-rosy-copper-600 hover:bg-rosy-copper-700 text-white transition cursor-pointer"
+                  onClick={() => {
+                    setModalLanguage("typescript");
+                    setComponentForm({ name: "", description: "", code: TEMPLATES.typescript });
+                    setComponentModalOpen(true);
+                  }}
+                  className="p-1.5 rounded-lg bg-rosy-copper-600 hover:bg-rosy-copper-750 text-white transition cursor-pointer"
                   title="Add Component"
                 >
                   <PlusSignIcon className="w-3.5 h-3.5" />
@@ -601,27 +730,27 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                 placeholder="Filter component..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-8 pr-3 py-2 rounded-lg text-sm border border-golden-chestnut-200 bg-white text-golden-chestnut-900 placeholder-graphite-400 focus:border-rosy-copper-600 outline-none transition"
+                className="w-full pl-8 pr-3 py-2 rounded-xl text-xs border border-golden-chestnut-200 bg-white text-golden-chestnut-900 placeholder-graphite-400 focus:border-rosy-copper-600 outline-none transition"
               />
             </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
             {filteredComponents.length === 0 ? (
-              <p className="text-center text-graphite-400 text-sm py-8">No elements found.</p>
+              <p className="text-center text-graphite-400 text-xs py-8">No elements found.</p>
             ) : (
               filteredComponents.map((comp) => (
                 <button
                   key={comp.id}
                   onClick={() => setActiveComponent(comp)}
-                  className={`w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-semibold flex items-center justify-between transition cursor-pointer ${
+                  className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition cursor-pointer ${
                     activeComponent?.id === comp.id
-                      ? "bg-white border border-golden-chestnut-200 text-rosy-copper-600 shadow-sm shadow-rosy-copper-600/5"
+                      ? "bg-white border border-golden-chestnut-200 text-rosy-copper-650 shadow-xs"
                       : "text-graphite-500 hover:text-graphite-800 hover:bg-golden-chestnut-100/60"
                   }`}
                 >
                   <span className="truncate">{comp.name}</span>
-                  <span className="text-xs text-graphite-400 shrink-0 select-none">
+                  <span className="text-[10px] text-graphite-400 shrink-0 select-none">
                     {comp.props.length} params
                   </span>
                 </button>
@@ -637,23 +766,23 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-golden-chestnut-200 pb-5 mb-6">
                 <div>
                   <div className="flex items-center gap-2">
-                    <h1 className="text-2xl font-bold text-golden-chestnut-950 tracking-tight font-serif">{activeComponent.name}</h1>
+                    <h1 className="text-2xl font-bold text-golden-chestnut-950 tracking-tight">{activeComponent.name}</h1>
                     {user && (
                       <button
                         onClick={() => handleDeleteComponent(activeComponent.id)}
-                        className="px-2.5 py-1 rounded text-xs font-semibold bg-oxblood-50 text-oxblood-700 hover:bg-oxblood-100 transition cursor-pointer border border-oxblood-200"
+                        className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-oxblood-50 text-oxblood-700 hover:bg-oxblood-100 transition cursor-pointer border border-oxblood-200"
                       >
                         Delete
                       </button>
                     )}
                   </div>
-                  <p className="text-graphite-500 text-sm mt-1 max-w-xl leading-relaxed">{activeComponent.description}</p>
+                  <p className="text-graphite-500 text-xs mt-1 max-w-xl leading-relaxed">{activeComponent.description}</p>
                 </div>
 
                 <div className="flex items-center gap-2">
                   <button
                     onClick={handleShareProject}
-                    className="px-4.5 py-2.5 rounded-lg text-sm font-semibold border border-golden-chestnut-200 bg-white hover:bg-golden-chestnut-200 text-golden-chestnut-700 transition flex items-center gap-1.5 cursor-pointer"
+                    className="px-4.5 py-2.5 rounded-xl text-xs font-semibold border border-golden-chestnut-200 bg-white hover:bg-golden-chestnut-200 text-golden-chestnut-700 transition flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
                   >
                     <Share01Icon className="w-3.5 h-3.5 text-rosy-copper-600" />
                     Share Link
@@ -664,7 +793,7 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
               <div className="flex items-center gap-1 border-b border-golden-chestnut-200 mb-6">
                 <button
                   onClick={() => setActiveTab("playground")}
-                  className={`px-4 py-2.5 text-sm font-bold border-b-2 transition cursor-pointer ${
+                  className={`px-4 py-2.5 text-xs font-bold border-b-2 transition cursor-pointer ${
                     activeTab === "playground"
                       ? "border-rosy-copper-600 text-rosy-copper-600"
                       : "border-transparent text-graphite-400 hover:text-graphite-700"
@@ -675,7 +804,7 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                 {user && (
                   <button
                     onClick={() => setActiveTab("tailwind")}
-                    className={`px-4 py-2.5 text-sm font-bold border-b-2 transition cursor-pointer ${
+                    className={`px-4 py-2.5 text-xs font-bold border-b-2 transition cursor-pointer ${
                       activeTab === "tailwind"
                         ? "border-rosy-copper-600 text-rosy-copper-600"
                         : "border-transparent text-graphite-400 hover:text-graphite-700"
@@ -690,29 +819,51 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                 <div className="flex-1 flex flex-col gap-6">
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
                     {/* Monaco Editor */}
-                    <div className="flex flex-col rounded-2xl border border-golden-chestnut-200 bg-white overflow-hidden min-h-[440px] lg:min-h-0 shadow-sm shadow-rosy-copper-600/3">
+                    <div className="flex flex-col rounded-2xl border border-golden-chestnut-200 bg-white overflow-hidden min-h-[440px] lg:min-h-0 shadow-xs">
                       <div className="px-4 py-2.5 border-b border-golden-chestnut-200 flex items-center justify-between bg-golden-chestnut-100/30">
-                        <span className="text-xs font-bold tracking-wider uppercase text-graphite-550 flex items-center gap-1">
-                          <CodeIcon className="w-3.5 h-3.5 text-rosy-copper-600" /> TSX Source Code
+                        <span className="text-[10px] font-bold tracking-wider uppercase text-graphite-550 flex items-center gap-1">
+                          <CodeIcon className="w-3.5 h-3.5 text-rosy-copper-600" />{' '}
+                          {editorLanguage === 'typescript'
+                            ? 'TSX Source Code'
+                            : editorLanguage === 'javascript'
+                            ? 'JSX Source Code'
+                            : editorLanguage === 'html'
+                            ? 'HTML Source Code'
+                            : 'CSS Stylesheet'}
                         </span>
-                        {user ? (
-                          <button
-                            onClick={handleUpdateComponentCode}
-                            className="px-4.5 py-2 rounded-lg text-sm font-semibold bg-rosy-copper-600 hover:bg-rosy-copper-700 text-white transition cursor-pointer"
+                        <div className="flex items-center gap-2.5">
+                          <select
+                            value={editorLanguage}
+                            onChange={(e) => setEditorLanguage(e.target.value as "typescript" | "javascript" | "html" | "css")}
+                            disabled={!user}
+                            className="px-2.5 py-1 rounded-lg border border-golden-chestnut-200 bg-white text-[10px] font-bold text-golden-chestnut-900 outline-none focus:border-rosy-copper-600 transition disabled:opacity-50 cursor-pointer"
                           >
-                            Save Code
-                          </button>
-                        ) : (
-                          <span className="text-xs text-graphite-400 italic">Read-only preview</span>
-                        )}
+                            <option value="typescript">TSX (React)</option>
+                            <option value="javascript">JSX (React)</option>
+                            <option value="html">HTML / Tailwind</option>
+                            <option value="css">CSS stylesheet</option>
+                          </select>
+                          {user ? (
+                            <button
+                              onClick={handleUpdateComponentCode}
+                              className="px-4.5 py-1.5 rounded-xl text-xs font-semibold bg-rosy-copper-600 hover:bg-rosy-copper-750 text-white transition cursor-pointer shadow-xs active:scale-95"
+                            >
+                              Save Code
+                            </button>
+                          ) : (
+                            <span className="text-xs text-graphite-400 italic">Read-only preview</span>
+                          )}
+                        </div>
                       </div>
                       <div className="flex-1 min-h-0 relative">
                         <Editor
+                          key={activeComponent.id + "-" + editorLanguage}
                           height="100%"
-                          defaultLanguage="typescript"
+                          language={editorLanguage}
                           theme="vs"
-                          value={editorCode}
-                          onChange={(val) => setEditorCode(val || "")}
+                          defaultValue={activeComponent.code}
+                          onMount={handleMainEditorDidMount}
+                          onChange={(val) => debouncedSetEditorCode(val || "")}
                           options={{
                             minimap: { enabled: false },
                             fontSize: 12,
@@ -727,9 +878,9 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
 
                     {/* Preview Sandbox */}
                     <div className="flex flex-col gap-6">
-                      <div className="flex flex-col rounded-2xl border border-golden-chestnut-200 bg-white overflow-hidden flex-1 min-h-[350px] shadow-sm shadow-rosy-copper-600/3">
+                      <div className="flex flex-col rounded-2xl border border-golden-chestnut-200 bg-white overflow-hidden flex-1 min-h-[350px] shadow-xs">
                         <div className="px-4 py-2.5 border-b border-golden-chestnut-200 bg-golden-chestnut-100/30 flex items-center justify-between">
-                          <span className="text-xs font-bold tracking-wider uppercase text-graphite-550">
+                          <span className="text-[10px] font-bold tracking-wider uppercase text-graphite-550">
                             Live Preview
                           </span>
 
@@ -777,7 +928,7 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                                   ? "768px"
                                   : "100%",
                             }}
-                            className="h-full max-h-[300px] min-h-[260px] border border-golden-chestnut-200 rounded-xl overflow-hidden shadow-sm bg-white transition-all duration-200 relative flex flex-col"
+                            className="h-full max-h-[300px] min-h-[260px] border border-golden-chestnut-200 rounded-xl overflow-hidden shadow-xs bg-white transition-all duration-200 relative flex flex-col"
                           >
                             <div className="px-2.5 py-0.5 bg-golden-chestnut-100/40 text-[9px] text-graphite-400 flex items-center justify-between border-b border-golden-chestnut-200/60">
                               <span>
@@ -799,13 +950,13 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                       </div>
 
                       {/* Props board */}
-                      <div className="p-5 rounded-2xl border border-golden-chestnut-200 bg-white shadow-sm shadow-rosy-copper-600/3">
-                        <h3 className="text-sm font-bold tracking-wider uppercase text-graphite-550 mb-3.5 flex items-center gap-1">
+                      <div className="p-5 rounded-2xl border border-golden-chestnut-200 bg-white shadow-xs">
+                        <h3 className="text-xs font-bold tracking-wider uppercase text-graphite-550 mb-3.5 flex items-center gap-1">
                           <Settings01Icon className="w-3.5 h-3.5 text-rosy-copper-600" /> Controls Panel
                         </h3>
 
                         {activeComponent.props.length === 0 ? (
-                          <p className="text-graphite-400 text-sm py-3 text-center">
+                          <p className="text-graphite-400 text-xs py-3 text-center">
                             No parameters parsed from source.
                           </p>
                         ) : (
@@ -822,13 +973,13 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                                     className="flex items-center justify-between p-2.5 rounded-xl border border-golden-chestnut-200 bg-golden-chestnut-100/30"
                                   >
                                     <div>
-                                      <span className="text-sm font-bold text-golden-chestnut-700 block">{p.name}</span>
-                                      <span className="text-sm text-graphite-400 font-mono">{p.type}</span>
+                                      <span className="text-xs font-bold text-golden-chestnut-700 block">{p.name}</span>
+                                      <span className="text-[10px] text-graphite-400 font-mono">{p.type}</span>
                                     </div>
                                     <button
                                       onClick={() => handlePropChange(p.name, !val)}
                                       className={`w-9 h-5.5 rounded-full p-0.5 cursor-pointer transition ${
-                                        val ? "bg-rosy-copper-600" : "bg-graphite-200"
+                                        val ? "bg-rosy-copper-600" : "bg-graphite-250"
                                       }`}
                                     >
                                       <div
@@ -850,13 +1001,13 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                                 return (
                                   <div key={p.name} className="flex flex-col gap-1 p-2.5 rounded-xl border border-golden-chestnut-200 bg-golden-chestnut-100/30">
                                     <div className="flex justify-between">
-                                      <span className="text-sm font-bold text-golden-chestnut-700">{p.name}</span>
-                                      <span className="text-sm text-graphite-400 font-mono">{p.type}</span>
+                                      <span className="text-xs font-bold text-golden-chestnut-700">{p.name}</span>
+                                      <span className="text-[10px] text-graphite-400 font-mono">{p.type}</span>
                                     </div>
                                     <select
-                                      value={val || ""}
+                                      value={val !== undefined ? String(val) : ""}
                                       onChange={(e) => handlePropChange(p.name, e.target.value)}
-                                      className="w-full bg-golden-chestnut-50 border border-golden-chestnut-200 text-sm px-2 py-1.5 rounded-lg outline-none text-golden-chestnut-700 focus:border-rosy-copper-600"
+                                      className="w-full bg-golden-chestnut-50 border border-golden-chestnut-200 text-xs px-2 py-1.5 rounded-lg outline-none text-golden-chestnut-700 focus:border-rosy-copper-600"
                                     >
                                       {options.map((opt) => (
                                         <option key={opt} value={opt}>
@@ -871,14 +1022,14 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                               return (
                                 <div key={p.name} className="flex flex-col gap-1 p-2.5 rounded-xl border border-golden-chestnut-200 bg-golden-chestnut-100/30">
                                   <div className="flex justify-between">
-                                    <span className="text-sm font-bold text-golden-chestnut-700">{p.name}</span>
-                                    <span className="text-xs text-graphite-400 font-mono">{p.type}</span>
+                                    <span className="text-xs font-bold text-golden-chestnut-700">{p.name}</span>
+                                    <span className="text-[10px] text-graphite-400 font-mono">{p.type}</span>
                                   </div>
                                   <input
                                     type="text"
-                                    value={val !== undefined ? val : ""}
+                                    value={val !== undefined ? String(val) : ""}
                                     onChange={(e) => handlePropChange(p.name, e.target.value)}
-                                    className="w-full bg-golden-chestnut-50 border border-golden-chestnut-200 text-sm px-2.5 py-1.5 rounded-lg outline-none text-golden-chestnut-700 focus:border-rosy-copper-600"
+                                    className="w-full bg-golden-chestnut-50 border border-golden-chestnut-200 text-xs px-2.5 py-1.5 rounded-lg outline-none text-golden-chestnut-700 focus:border-rosy-copper-600"
                                     placeholder={p.defaultValue || "e.g. click"}
                                   />
                                 </div>
@@ -891,14 +1042,14 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                   </div>
 
                   {/* Snippet display */}
-                  <div className="p-5 rounded-2xl border border-golden-chestnut-200 bg-white shadow-sm shadow-rosy-copper-600/3">
+                  <div className="p-5 rounded-2xl border border-golden-chestnut-200 bg-white shadow-xs">
                     <div className="flex items-center justify-between gap-4 mb-3">
-                      <h3 className="text-xs font-bold tracking-wider uppercase text-graphite-550">
+                      <h3 className="text-[10px] font-bold tracking-wider uppercase text-graphite-550">
                         React JSX Snippet
                       </h3>
                       <button
                         onClick={() => copyToClipboard(propRenderSnippet, setCopiedPropSnippet)}
-                        className="px-4.5 py-2.5 rounded-lg text-sm font-semibold bg-white border border-golden-chestnut-200 hover:border-rosy-copper-600 text-golden-chestnut-700 transition flex items-center gap-1 cursor-pointer"
+                        className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-white border border-golden-chestnut-200 hover:border-rosy-copper-600 text-golden-chestnut-700 transition flex items-center gap-1 cursor-pointer shadow-xs active:scale-95"
                       >
                         {copiedPropSnippet ? (
                           "Copied!"
@@ -909,20 +1060,20 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                         )}
                       </button>
                     </div>
-                    <div className="p-3.5 rounded-xl bg-golden-chestnut-100/40 border border-golden-chestnut-200 font-mono text-sm text-golden-chestnut-800 overflow-x-auto whitespace-nowrap">
+                    <div className="p-3.5 rounded-xl bg-golden-chestnut-100/40 border border-golden-chestnut-200 font-mono text-xs text-golden-chestnut-800 overflow-x-auto whitespace-nowrap">
                       {propRenderSnippet}
                     </div>
                   </div>
 
                   {/* Auto generated prop table */}
-                  <div className="p-5 rounded-2xl border border-golden-chestnut-200 bg-white overflow-hidden shadow-sm shadow-rosy-copper-600/3">
-                    <h3 className="text-xs font-bold tracking-wider uppercase text-graphite-550 mb-3.5">
+                  <div className="p-5 rounded-2xl border border-golden-chestnut-200 bg-white overflow-hidden shadow-xs">
+                    <h3 className="text-[10px] font-bold tracking-wider uppercase text-graphite-550 mb-3.5">
                       Props Definitions API
                     </h3>
                     <div className="overflow-x-auto">
-                      <table className="w-full text-left text-sm border-collapse">
+                      <table className="w-full text-left text-xs border-collapse">
                         <thead>
-                          <tr className="border-b border-golden-chestnut-200 text-graphite-450 uppercase tracking-wider font-bold text-xs">
+                          <tr className="border-b border-golden-chestnut-200 text-graphite-450 uppercase tracking-wider font-bold text-[9px]">
                             <th className="pb-2.5 font-semibold">Prop</th>
                             <th className="pb-2.5 font-semibold">Type</th>
                             <th className="pb-2.5 font-semibold text-center">Required</th>
@@ -937,10 +1088,10 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                               <td className="py-2.5 font-mono text-rosy-copper-600 font-semibold">{p.type}</td>
                               <td className="py-2.5 text-center">
                                 <span
-                                  className={`inline-flex px-2 py-0.5 rounded text-xs font-bold border ${
+                                  className={`inline-flex px-2 py-0.5 rounded text-[10px] font-bold border ${
                                     p.required
                                       ? "bg-oxblood-50 text-oxblood-700 border-oxblood-200/50"
-                                      : "bg-golden-chestnut-100 text-graphite-500 border-transparent"
+                                      : "bg-golden-chestnut-100 text-graphite-550 border-transparent"
                                   }`}
                                 >
                                   {p.required ? "Yes" : "No"}
@@ -963,10 +1114,10 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
 
               {activeTab === "tailwind" && (
                 <div className="flex-1 flex flex-col gap-6">
-                  <div className="p-5 rounded-2xl border border-golden-chestnut-200 bg-white shadow-sm shadow-rosy-copper-600/3">
-                    <h2 className="text-base font-bold text-golden-chestnut-950 mb-1 font-serif">Tailwind Configuration</h2>
-                    <p className="text-xs text-graphite-400 leading-relaxed mb-5">
-                      Input your brand's tailwind config object dynamically to enable rendering custom colors, borders, and spacings.
+                  <div className="p-5 rounded-2xl border border-golden-chestnut-200 bg-white shadow-xs">
+                    <h2 className="text-base font-bold text-golden-chestnut-950 mb-1">Tailwind Configuration</h2>
+                    <p className="text-xs text-graphite-500 leading-relaxed mb-5">
+                      Input your brand&apos;s tailwind config object dynamically to enable rendering custom colors, borders, and spacings.
                     </p>
 
                     <div className="space-y-4">
@@ -976,10 +1127,11 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                         </label>
                         <div className="h-56 rounded-xl border border-golden-chestnut-200 overflow-hidden bg-golden-chestnut-50">
                           <Editor
+                            key={activeProject?.id}
                             height="100%"
                             defaultLanguage="javascript"
                             theme="vs"
-                            value={projectForm.tailwindConfig}
+                            defaultValue={activeProject?.tailwindConfig || ""}
                             onChange={(val) => setProjectForm({ ...projectForm, tailwindConfig: val || "" })}
                             options={{
                               minimap: { enabled: false },
@@ -994,7 +1146,7 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                       <button
                         onClick={handleUpdateProjectTailwind}
                         disabled={actionLoading}
-                        className="px-4 py-2.5 rounded-lg text-xs font-bold bg-rosy-copper-600 hover:bg-rosy-copper-700 text-white transition cursor-pointer"
+                        className="px-4 py-2 rounded-xl text-xs font-semibold bg-rosy-copper-600 hover:bg-rosy-copper-700 text-white transition cursor-pointer shadow-xs active:scale-95"
                       >
                         {actionLoading ? "Saving..." : "Save Config Options"}
                       </button>
@@ -1008,17 +1160,28 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
               <div className="w-10 h-10 rounded-xl bg-golden-chestnut-100 flex items-center justify-center text-rosy-copper-600 mb-4 border border-golden-chestnut-200">
                 <CodeIcon className="w-5 h-5" />
               </div>
-              <h2 className="text-sm font-bold text-golden-chestnut-950 mb-1 font-serif">Empty Components Registry</h2>
+              <h2 className="text-sm font-bold text-golden-chestnut-950 mb-1">Empty Components Registry</h2>
               <p className="text-graphite-500 text-xs leading-relaxed mb-5">
                 Register your first TSX or HTML/CSS component to initialize documentation.
               </p>
-              {user && (
+              {user ? (
                 <button
-                  onClick={() => setComponentModalOpen(true)}
-                  className="px-4 py-2.5 rounded-xl text-xs font-bold bg-rosy-copper-600 hover:bg-rosy-copper-700 text-white cursor-pointer flex items-center gap-1 mx-auto"
+                  onClick={() => {
+                    setModalLanguage("typescript");
+                    setComponentForm({ name: "", description: "", code: TEMPLATES.typescript });
+                    setComponentModalOpen(true);
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-rosy-copper-600 hover:bg-rosy-copper-750 text-white cursor-pointer flex items-center gap-1.5 mx-auto active:scale-95 shadow-xs"
                 >
                   <PlusSignIcon className="w-3.5 h-3.5" /> Save First Component
                 </button>
+              ) : (
+                <Link
+                  href="/login"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-rosy-copper-600 hover:bg-rosy-copper-750 text-white cursor-pointer flex items-center gap-1.5 mx-auto active:scale-95 shadow-xs w-fit"
+                >
+                  Sign In to Create Components
+                </Link>
               )}
             </div>
           )}
@@ -1028,7 +1191,7 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
       {/* Modal: Create Component */}
       {componentModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-graphite-950/20 backdrop-blur-xs">
-          <div className="w-full max-w-xl p-6 rounded-3xl border border-golden-chestnut-200 bg-white shadow-xl relative flex flex-col max-h-[85vh]">
+          <div className="w-full max-w-xl p-6 rounded-2xl border border-golden-chestnut-200 bg-white shadow-xl relative flex flex-col max-h-[85vh]">
             <button
               onClick={() => setComponentModalOpen(false)}
               className="absolute right-4 top-4 p-1.5 rounded-lg text-graphite-400 hover:text-graphite-800 hover:bg-graphite-50 transition cursor-pointer"
@@ -1036,57 +1199,76 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
               <Cancel01Icon className="w-4.5 h-4.5" />
             </button>
 
-            <h3 className="text-lg font-bold text-golden-chestnut-950 mb-1 font-serif">New Component</h3>
-            <p className="text-graphite-400 text-sm mb-4">Add a custom React or HTML/Tailwind component to this registry.</p>
+            <h3 className="text-base font-bold text-golden-chestnut-950 mb-0.5">New Component</h3>
+            <p className="text-graphite-500 text-xs mb-4">Add a custom React or HTML/Tailwind component to this registry.</p>
 
             <form onSubmit={handleCreateComponent} className="space-y-4 flex-1 flex flex-col min-h-0">
               {formErrors.form && (
-                <div className="p-2.5 bg-oxblood-50 border border-oxblood-100 rounded-lg text-oxblood-700 text-sm shrink-0">
+                <div className="p-2.5 bg-oxblood-50 border border-oxblood-100 rounded-xl text-oxblood-700 text-xs shrink-0 font-semibold">
                   {formErrors.form}
                 </div>
               )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 shrink-0">
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-graphite-550 mb-1">
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-graphite-550 mb-1">
                     Name (PascalCase)
                   </label>
                   <input
                     type="text"
                     value={componentForm.name}
                     onChange={(e) => setComponentForm({ ...componentForm, name: e.target.value })}
-                    className="w-full px-3 py-2.5 rounded-xl border border-golden-chestnut-200 bg-golden-chestnut-50 text-golden-chestnut-900 text-sm focus:border-rosy-copper-600 outline-none"
+                    className="w-full px-3 py-2 rounded-xl border border-golden-chestnut-200 bg-golden-chestnut-50 text-golden-chestnut-900 text-xs focus:border-rosy-copper-600 outline-none"
                     placeholder="e.g. HeaderWidget"
                   />
-                  {formErrors.name && <p className="text-xs text-oxblood-500 mt-1 font-semibold">{formErrors.name}</p>}
+                  {formErrors.name && <p className="text-[10px] text-oxblood-500 mt-1 font-semibold">{formErrors.name}</p>}
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-graphite-550 mb-1">
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-graphite-550 mb-1">
                     Short Description
                   </label>
                   <input
                     type="text"
                     value={componentForm.description}
                     onChange={(e) => setComponentForm({ ...componentForm, description: e.target.value })}
-                    className="w-full px-3 py-2.5 rounded-xl border border-golden-chestnut-200 bg-golden-chestnut-50 text-golden-chestnut-900 text-sm focus:border-rosy-copper-600 outline-none"
+                    className="w-full px-3 py-2 rounded-xl border border-golden-chestnut-200 bg-golden-chestnut-50 text-golden-chestnut-900 text-xs focus:border-rosy-copper-600 outline-none"
                     placeholder="e.g. Navigation brand widget"
                   />
-                  {formErrors.description && <p className="text-xs text-oxblood-500 mt-1 font-semibold">{formErrors.description}</p>}
+                  {formErrors.description && <p className="text-[10px] text-oxblood-500 mt-1 font-semibold">{formErrors.description}</p>}
                 </div>
               </div>
 
               <div className="flex-1 min-h-0 flex flex-col">
-                <label className="block text-xs font-bold uppercase tracking-wider text-graphite-550 mb-1.5 shrink-0">
-                  TSX Source Code
-                </label>
+                <div className="flex items-center justify-between mb-1.5 shrink-0">
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-graphite-550">
+                    Source Code
+                  </label>
+                  <select
+                    value={modalLanguage}
+                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                      const lang = e.target.value as keyof typeof TEMPLATES;
+                      setModalLanguage(lang);
+                      if (modalEditorRef.current) {
+                        modalEditorRef.current.setValue(TEMPLATES[lang]);
+                      }
+                    }}
+                    className="px-2 py-1 rounded-lg border border-golden-chestnut-200 bg-white text-[10px] font-bold text-golden-chestnut-900 outline-none focus:border-rosy-copper-600 transition cursor-pointer"
+                  >
+                    <option value="typescript">TSX (React)</option>
+                    <option value="javascript">JSX (React)</option>
+                    <option value="html">HTML / Tailwind</option>
+                    <option value="css">CSS stylesheet</option>
+                  </select>
+                </div>
                 <div className="flex-1 min-h-[220px] rounded-xl border border-golden-chestnut-200 overflow-hidden bg-golden-chestnut-50">
                   <Editor
+                    key={(componentModalOpen ? "open" : "closed") + "-" + modalLanguage}
                     height="100%"
-                    defaultLanguage="typescript"
+                    language={modalLanguage}
                     theme="vs"
-                    value={componentForm.code}
-                    onChange={(val) => setComponentForm({ ...componentForm, code: val || "" })}
+                    defaultValue={TEMPLATES[modalLanguage]}
+                    onMount={handleModalEditorDidMount}
                     options={{
                       minimap: { enabled: false },
                       fontSize: 12,
@@ -1095,21 +1277,21 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                     }}
                   />
                 </div>
-                {formErrors.code && <p className="text-xs text-oxblood-500 mt-1 shrink-0 font-semibold">{formErrors.code}</p>}
+                {formErrors.code && <p className="text-[10px] text-oxblood-500 mt-1 shrink-0 font-semibold">{formErrors.code}</p>}
               </div>
 
-              <div className="pt-2 flex justify-end gap-2.5 shrink-0">
+              <div className="pt-2 flex justify-end gap-2 shrink-0 border-t border-golden-chestnut-100">
                 <button
                   type="button"
                   onClick={() => setComponentModalOpen(false)}
-                  className="px-3.5 py-1.5 text-sm font-bold text-graphite-400 hover:text-graphite-800"
+                  className="px-3 py-2 text-xs font-semibold text-graphite-500 hover:text-graphite-800"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={actionLoading}
-                  className="px-5 py-2.5 rounded-xl text-sm font-bold bg-rosy-copper-600 hover:bg-rosy-copper-700 text-white cursor-pointer shadow-sm"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-rosy-copper-600 hover:bg-rosy-copper-700 text-white cursor-pointer shadow-xs active:scale-95"
                 >
                   {actionLoading ? "Saving..." : "Save Component"}
                 </button>
@@ -1122,7 +1304,7 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
       {/* Modal: Share System Link */}
       {shareModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-graphite-950/20 backdrop-blur-xs">
-          <div className="w-full max-w-sm p-6 rounded-3xl border border-golden-chestnut-200 bg-white shadow-xl relative">
+          <div className="w-full max-w-sm p-6 rounded-2xl border border-golden-chestnut-200 bg-white shadow-xl relative animate-scale-up">
             <button
               onClick={() => setShareModalOpen(false)}
               className="absolute right-4 top-4 p-1.5 rounded-lg text-graphite-400 hover:text-graphite-800 hover:bg-graphite-50 transition cursor-pointer"
@@ -1130,8 +1312,8 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
               <Cancel01Icon className="w-4.5 h-4.5" />
             </button>
 
-            <h3 className="text-lg font-bold text-golden-chestnut-950 mb-1 font-serif">Share Design System</h3>
-            <p className="text-graphite-400 text-sm mb-5">
+            <h3 className="text-base font-bold text-golden-chestnut-950 mb-0.5">Share Design System</h3>
+            <p className="text-graphite-500 text-xs mb-4">
               Reviewers with this link can view and test component library instances live.
             </p>
 
@@ -1141,24 +1323,24 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
                   type="text"
                   readOnly
                   value={shareLink}
-                  className="flex-1 px-3 py-2 rounded-lg border border-golden-chestnut-200 bg-golden-chestnut-50 text-graphite-600 text-sm outline-none"
+                  className="flex-1 px-3 py-2 rounded-xl border border-golden-chestnut-200 bg-golden-chestnut-50 text-graphite-700 text-xs outline-none"
                 />
                 <button
                   onClick={() => copyToClipboard(shareLink, setCopiedShareLink)}
-                  className="px-3.5 py-2 rounded-xl text-sm font-bold bg-rosy-copper-600 hover:bg-rosy-copper-700 text-white transition cursor-pointer shrink-0"
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold bg-rosy-copper-600 hover:bg-rosy-copper-700 text-white transition cursor-pointer shrink-0 shadow-xs active:scale-95"
                 >
                   {copiedShareLink ? "Copied!" : "Copy Link"}
                 </button>
               </div>
 
-              <div className="p-3 bg-golden-chestnut-100 border border-golden-chestnut-200 rounded-xl text-xs text-graphite-500 leading-relaxed">
+              <div className="p-3 bg-golden-chestnut-50 border border-golden-chestnut-200 rounded-xl text-[10px] text-graphite-500 leading-relaxed font-medium">
                 📢 Shareable links let product managers and clients interact with styling layouts immediately without local setup.
               </div>
 
               <div className="pt-2 flex justify-end">
                 <button
                   onClick={() => setShareModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-sm font-bold border border-golden-chestnut-200 bg-white hover:bg-golden-chestnut-200 text-golden-chestnut-700 cursor-pointer"
+                  className="px-4 py-2 rounded-xl text-xs font-bold border border-golden-chestnut-200 bg-white hover:bg-golden-chestnut-50 text-golden-chestnut-700 cursor-pointer shadow-xs"
                 >
                   Close
                 </button>
@@ -1168,42 +1350,6 @@ export default function ProjectWorkspacePage({ params }: PageProps) {
         </div>
       )}
 
-      {/* Footer */}
-      <footer className="border-t border-golden-chestnut-200 bg-white py-12 px-6">
-        <div className="container mx-auto max-w-4xl grid grid-cols-1 md:grid-cols-4 gap-10">
-          <div className="md:col-span-2 space-y-4">
-            <span className="text-xl font-bold tracking-tight text-rosy-copper-600 font-serif">
-              Scaffold
-            </span>
-            <p className="text-sm text-graphite-500 max-w-sm leading-relaxed">
-              Bridges the gap between engineering and design. An instant, hosted component documentation library workspace for product developers and design stakeholders.
-            </p>
-          </div>
-          <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-graphite-450 mb-3.5">Product</h4>
-            <ul className="space-y-2.5 text-sm">
-              <li><Link href="/signup" className="text-graphite-500 hover:text-rosy-copper-600 transition">Interactive Sandbox</Link></li>
-              <li><Link href="/login" className="text-graphite-500 hover:text-rosy-copper-600 transition">Automatic Prop Tables</Link></li>
-              <li><Link href="/signup" className="text-graphite-500 hover:text-rosy-copper-600 transition">Responsive Viewports</Link></li>
-            </ul>
-          </div>
-          <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-graphite-450 mb-3.5">Community</h4>
-            <ul className="space-y-2.5 text-sm">
-              <li><a href="https://github.com" target="_blank" rel="noopener noreferrer" className="text-graphite-500 hover:text-rosy-copper-600 transition">GitHub</a></li>
-              <li><a href="https://twitter.com" target="_blank" rel="noopener noreferrer" className="text-graphite-500 hover:text-rosy-copper-600 transition">Twitter / X</a></li>
-              <li><a href="https://discord.com" target="_blank" rel="noopener noreferrer" className="text-graphite-500 hover:text-rosy-copper-600 transition">Discord Community</a></li>
-            </ul>
-          </div>
-        </div>
-        <div className="container mx-auto max-w-4xl border-t border-golden-chestnut-200/50 mt-8 pt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-graphite-400">
-          <span>&copy; {new Date().getFullYear()} Scaffold. Crafted for modern product teams.</span>
-          <div className="flex gap-4">
-            <a href="#" className="hover:text-rosy-copper-600 transition">Privacy Policy</a>
-            <a href="#" className="hover:text-rosy-copper-600 transition">Terms of Service</a>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }
